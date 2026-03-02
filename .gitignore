@@ -1,0 +1,16 @@
+## Build artifacts
+bin/
+obj/
+
+## IDE
+.idea/
+.vs/
+*.user
+*.suo
+
+## OS
+Thumbs.db
+.DS_Store
+
+## Claude Code
+.claude/
