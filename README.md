@@ -92,28 +92,7 @@ All packages target **net9.0** and are published to the [GitHub Packages registr
 
 ## Installation
 
-Add the GitHub Packages feed to your `nuget.config`:
-
-```xml
-<configuration>
-  <packageSources>
-    <add key="github" value="https://nuget.pkg.github.com/DavidGershony/index.json" />
-  </packageSources>
-  <packageSourceCredentials>
-    <github>
-      <add key="Username" value="YOUR_GITHUB_USERNAME" />
-      <add key="ClearTextPassword" value="YOUR_GITHUB_TOKEN" />
-    </github>
-  </packageSourceCredentials>
-</configuration>
-```
-
-Then add the packages you need:
-
-```bash
-dotnet add package MarmotMdk.Core
-dotnet add package MarmotMdk.Storage.Memory   # or MarmotMdk.Storage.Sqlite
-```
+> **Work in progress** — installation instructions will be added in a future release.
 
 ---
 
