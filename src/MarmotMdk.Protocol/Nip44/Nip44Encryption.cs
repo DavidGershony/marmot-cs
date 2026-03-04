@@ -1,13 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
 using NBitcoin.Secp256k1;
+using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;
-using BcChaCha20Poly1305 = Org.BouncyCastle.Crypto.Modes.ChaCha20Poly1305;
 
 namespace MarmotMdk.Protocol.Nip44;
 
 /// <summary>
-/// NIP-44 v2 encryption/decryption using secp256k1 ECDH + HKDF + ChaCha20-Poly1305.
+/// NIP-44 v2 encryption/decryption using secp256k1 ECDH + HKDF + ChaCha20 + HMAC-SHA256.
 /// </summary>
 /// <remarks>
 /// Protocol steps:
@@ -15,7 +15,7 @@ namespace MarmotMdk.Protocol.Nip44;
 ///   <item>Conversation key: HKDF-Extract(salt="nip44-v2", ikm=shared_x) where shared_x is the
 ///         32-byte x-coordinate from secp256k1 ECDH.</item>
 ///   <item>Per-message: nonce = random 32 bytes; message_keys = HKDF-Expand(conversation_key, nonce, 76).</item>
-///   <item>Encrypt: ChaCha20-Poly1305(key=encryption_key, nonce=chacha_nonce, aad=empty, plaintext=padded_message).</item>
+///   <item>Encrypt: ChaCha20(key=encryption_key, nonce=chacha_nonce, plaintext=padded_message).</item>
 ///   <item>MAC: HMAC-SHA256(hmac_key, nonce || ciphertext).</item>
 ///   <item>Result: base64(0x02 || nonce || ciphertext || mac).</item>
 /// </list>
@@ -24,6 +24,9 @@ public static class Nip44Encryption
 {
     private const byte Version = 0x02;
     private static readonly byte[] HkdfSalt = Encoding.UTF8.GetBytes("nip44-v2");
+
+    // version(1) + nonce(32) + min_ciphertext(34) + mac(32) = 99
+    private const int MinPayloadLength = 99;
 
     /// <summary>
     /// Derives a 32-byte NIP-44 conversation key from a private key and a public key using secp256k1 ECDH.
@@ -100,7 +103,7 @@ public static class Nip44Encryption
     /// <param name="conversationKey">32-byte conversation key derived from ECDH.</param>
     /// <returns>The decrypted plaintext string.</returns>
     /// <exception cref="ArgumentException">Thrown when conversation key length is invalid or payload is malformed.</exception>
-    /// <exception cref="CryptographicException">Thrown when MAC verification or decryption fails.</exception>
+    /// <exception cref="CryptographicException">Thrown when MAC verification fails.</exception>
     public static string Decrypt(string payload, byte[] conversationKey)
     {
         ArgumentNullException.ThrowIfNull(payload);
@@ -109,9 +112,7 @@ public static class Nip44Encryption
 
         byte[] data = Convert.FromBase64String(payload);
 
-        // Minimum: 1 (version) + 32 (nonce) + 16 (min ciphertext with poly1305 tag for 32 bytes padded = 32+16=48) + 32 (mac)
-        // Actually min padded size is 32 bytes, so ciphertext = 32 + 16 (tag) = 48
-        if (data.Length < 1 + 32 + 48 + 32)
+        if (data.Length < MinPayloadLength)
             throw new ArgumentException("Payload too short.", nameof(payload));
 
         // Check version
@@ -137,8 +138,8 @@ public static class Nip44Encryption
         if (!CryptographicOperations.FixedTimeEquals(mac, expectedMac))
             throw new CryptographicException("NIP-44 MAC verification failed.");
 
-        // Decrypt with ChaCha20-Poly1305
-        byte[] padded = ChaCha20Poly1305Decrypt(keys.EncryptionKey, keys.Nonce, ciphertext);
+        // Decrypt with ChaCha20
+        byte[] padded = ChaCha20Process(keys.EncryptionKey, keys.Nonce, ciphertext);
 
         // Unpad
         byte[] messageBytes = UnpadMessage(padded);
@@ -193,7 +194,7 @@ public static class Nip44Encryption
         return message;
     }
 
-    private static string EncryptWithNonce(byte[] messageBytes, byte[] conversationKey, byte[] nonce)
+    internal static string EncryptWithNonce(byte[] messageBytes, byte[] conversationKey, byte[] nonce)
     {
         // Derive message keys
         Nip44MessageKeys keys = Nip44MessageKeys.Derive(conversationKey, nonce);
@@ -201,8 +202,8 @@ public static class Nip44Encryption
         // Pad the message
         byte[] padded = PadMessage(messageBytes);
 
-        // Encrypt with ChaCha20-Poly1305
-        byte[] ciphertext = ChaCha20Poly1305Encrypt(keys.EncryptionKey, keys.Nonce, padded);
+        // Encrypt with ChaCha20 (stream cipher – output length equals input length)
+        byte[] ciphertext = ChaCha20Process(keys.EncryptionKey, keys.Nonce, padded);
 
         // MAC: HMAC-SHA256(hmac_key, nonce || ciphertext)
         byte[] mac = ComputeMac(keys.HmacKey, nonce, ciphertext);
@@ -225,45 +226,17 @@ public static class Nip44Encryption
         return hmac.Hash!;
     }
 
-    private static byte[] ChaCha20Poly1305Encrypt(byte[] key, byte[] nonce, byte[] plaintext)
+    /// <summary>
+    /// Applies ChaCha20 (IETF / RFC 8439 variant, 96-bit nonce) as a stream cipher.
+    /// Since it is symmetric, the same method handles both encryption and decryption.
+    /// </summary>
+    private static byte[] ChaCha20Process(byte[] key, byte[] nonce, byte[] input)
     {
-        var cipher = new BcChaCha20Poly1305();
-        var parameters = new AeadParameters(
-            new KeyParameter(key),
-            128, // tag size in bits
-            nonce,
-            Array.Empty<byte>() // no AAD
-        );
-
-        cipher.Init(true, parameters);
-        byte[] output = new byte[cipher.GetOutputSize(plaintext.Length)];
-        int len = cipher.ProcessBytes(plaintext, 0, plaintext.Length, output, 0);
-        len += cipher.DoFinal(output, len);
-
-        // Output contains ciphertext + 16-byte tag
-        byte[] result = new byte[len];
-        Buffer.BlockCopy(output, 0, result, 0, len);
-        return result;
-    }
-
-    private static byte[] ChaCha20Poly1305Decrypt(byte[] key, byte[] nonce, byte[] ciphertextWithTag)
-    {
-        var cipher = new BcChaCha20Poly1305();
-        var parameters = new AeadParameters(
-            new KeyParameter(key),
-            128, // tag size in bits
-            nonce,
-            Array.Empty<byte>() // no AAD
-        );
-
-        cipher.Init(false, parameters);
-        byte[] output = new byte[cipher.GetOutputSize(ciphertextWithTag.Length)];
-        int len = cipher.ProcessBytes(ciphertextWithTag, 0, ciphertextWithTag.Length, output, 0);
-        len += cipher.DoFinal(output, len);
-
-        byte[] result = new byte[len];
-        Buffer.BlockCopy(output, 0, result, 0, len);
-        return result;
+        var engine = new ChaCha7539Engine();
+        engine.Init(true, new ParametersWithIV(new KeyParameter(key), nonce));
+        byte[] output = new byte[input.Length];
+        engine.ProcessBytes(input, 0, input.Length, output, 0);
+        return output;
     }
 
     /// <summary>
@@ -271,7 +244,7 @@ public static class Nip44Encryption
     /// If msgLen &lt;= 32: padded to 32.
     /// Otherwise: padded to next power of 2 relative to (msgLen - 1), with a minimum chunk size.
     /// </summary>
-    private static int CalcPaddedLength(int msgLen)
+    internal static int CalcPaddedLength(int msgLen)
     {
         if (msgLen <= 32)
             return 32;

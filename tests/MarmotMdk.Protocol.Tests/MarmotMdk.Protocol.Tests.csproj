@@ -14,4 +14,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MarmotMdk.Protocol\MarmotMdk.Protocol.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\tests\nip44-vectors\nip44.vectors.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>nip44.vectors.json</Link>
+    </Content>
+  </ItemGroup>
 </Project>
