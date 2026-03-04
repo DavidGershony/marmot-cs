@@ -28,6 +28,7 @@ A C# implementation of the [Marmot Messaging Development Kit](https://github.com
 - [Protocol Layer — Nostr / MIPs](#protocol-layer--nostr--mips)
 - [Exception Hierarchy](#exception-hierarchy)
 - [Building & Testing](#building--testing)
+- [Thread Safety](#thread-safety)
 - [License](#license)
 
 ---
@@ -224,7 +225,7 @@ var config = new MdkConfig
     OutOfOrderTolerance  = 5,                      // buffered out-of-order messages per epoch
     MaxForwardDistance   = 1000,                   // DoS limit on ratchet advancement
     MaxSnapshotsPerGroup = 5,                      // rollback depth per group
-    CipherSuite          = 0x0001,                 // only supported value (HPKE-DH25519 / ChaCha20-Poly1305 / SHA-256)
+    CipherSuite          = 0x0001,                 // only supported value (MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519)
 };
 ```
 
@@ -381,6 +382,12 @@ Test projects:
 | `MarmotMdk.Storage.Tests` | `MemoryStorageProvider` and `SqliteStorageProvider` |
 | `MarmotMdk.Core.Tests` | Config defaults, builder validation |
 | `MarmotMdk.Integration.Tests` | End-to-end: group creation, messaging, Welcome flow, member management |
+
+---
+
+## Thread Safety
+
+`Mdk<TStorage>` is **not thread-safe**. If you need to access an `Mdk` instance from multiple threads, provide your own external synchronization (e.g., `SemaphoreSlim` or `lock`).
 
 ---
 
