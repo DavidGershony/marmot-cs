@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <Version>0.1.0-alpha.3</Version>
+    <Version>0.1.0-alpha.4</Version>
     <Authors>DavidGershony</Authors>
     <Description>Marmot MDK - C# secure group messaging with MLS (RFC 9420) + Nostr</Description>
     <PackageProjectUrl>https://github.com/DavidGershony/marmot-cs</PackageProjectUrl>
