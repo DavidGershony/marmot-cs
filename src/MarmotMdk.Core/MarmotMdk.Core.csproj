@@ -8,7 +8,7 @@
     <InternalsVisibleTo Include="MarmotMdk.Core.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="DotnetMls" Version="0.1.0-alpha.3" />
+    <PackageReference Include="DotnetMls" Version="0.1.*-*" />
     <ProjectReference Include="..\MarmotMdk.Protocol\MarmotMdk.Protocol.csproj" />
     <ProjectReference Include="..\MarmotMdk.Storage.Abstractions\MarmotMdk.Storage.Abstractions.csproj" />
     <PackageReference Include="Nostr.Client" Version="2.1.0" />
