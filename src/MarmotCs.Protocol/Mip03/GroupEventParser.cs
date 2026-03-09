@@ -1,10 +1,11 @@
-using MarmotCs.Protocol.Nip44;
+using System.Security.Cryptography;
+using MarmotCs.Protocol.Crypto;
 
 namespace MarmotCs.Protocol.Mip03;
 
 /// <summary>
 /// Parses the content and tags of a Nostr kind 445 event to extract an MLS group message.
-/// The content is NIP-44 decrypted using a key derived from the MLS exporter secret.
+/// The content is decrypted with ChaCha20-Poly1305 using the MLS exporter secret directly as the key.
 /// </summary>
 public static class GroupEventParser
 {
@@ -12,15 +13,11 @@ public static class GroupEventParser
     /// Parses a kind 445 Nostr event's content and tags to extract the MLS message bytes
     /// and group identifier.
     /// </summary>
-    /// <param name="content">The NIP-44 encrypted content of the Nostr event.</param>
+    /// <param name="content">The ChaCha20-Poly1305 encrypted content as base64(nonce || ciphertext).</param>
     /// <param name="tags">The tags array from the Nostr event.</param>
     /// <param name="decryptionKey">
-    /// 32-byte symmetric key derived from the MLS exporter secret, used as the NIP-44 conversation key.
-    /// </param>
-    /// <param name="senderPublicKey">
-    /// The ephemeral public key of the sender for NIP-44 decryption.
-    /// Not used directly when a pre-derived conversation key is provided,
-    /// but included for protocol compatibility.
+    /// 32-byte symmetric key derived via MLS-Exporter("marmot", "group-event", 32),
+    /// used directly as the ChaCha20-Poly1305 key.
     /// </param>
     /// <returns>
     /// A tuple of (mlsMessageBytes, groupId) containing the decrypted MLS message
@@ -28,19 +25,15 @@ public static class GroupEventParser
     /// </returns>
     /// <exception cref="ArgumentNullException">Thrown when any parameter is null.</exception>
     /// <exception cref="FormatException">Thrown when the event format is invalid or required tags are missing.</exception>
-    /// <exception cref="System.Security.Cryptography.CryptographicException">
-    /// Thrown when decryption fails.
-    /// </exception>
+    /// <exception cref="CryptographicException">Thrown when decryption fails (invalid base64, short nonce, or AEAD auth failure).</exception>
     public static (byte[] mlsMessageBytes, byte[] groupId) ParseGroupEvent(
         string content,
         string[][] tags,
-        byte[] decryptionKey,
-        byte[] senderPublicKey)
+        byte[] decryptionKey)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(tags);
         ArgumentNullException.ThrowIfNull(decryptionKey);
-        ArgumentNullException.ThrowIfNull(senderPublicKey);
 
         if (decryptionKey.Length != 32)
             throw new ArgumentException("Decryption key must be 32 bytes.", nameof(decryptionKey));
@@ -61,9 +54,8 @@ public static class GroupEventParser
 
         byte[] groupId = Convert.FromHexString(groupIdHex);
 
-        // Decrypt the NIP-44 encrypted content using the exporter-derived key
-        string decryptedBase64 = Nip44Encryption.Decrypt(content, decryptionKey);
-        byte[] mlsMessageBytes = Convert.FromBase64String(decryptedBase64);
+        // Decrypt the ChaCha20-Poly1305 encrypted content per MIP-03
+        byte[] mlsMessageBytes = GroupEventEncryption.Decrypt(content, decryptionKey);
 
         return (mlsMessageBytes, groupId);
     }

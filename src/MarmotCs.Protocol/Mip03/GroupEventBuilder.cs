@@ -1,10 +1,11 @@
-using MarmotCs.Protocol.Nip44;
+using System.Security.Cryptography;
+using MarmotCs.Protocol.Crypto;
 
 namespace MarmotCs.Protocol.Mip03;
 
 /// <summary>
 /// Builds the content and tags for a Nostr kind 445 event containing an MLS group message.
-/// The content is NIP-44 encrypted using a key derived from the MLS exporter secret.
+/// The content is encrypted with ChaCha20-Poly1305 using the MLS exporter secret directly as the key.
 /// </summary>
 public static class GroupEventBuilder
 {
@@ -14,49 +15,42 @@ public static class GroupEventBuilder
     /// <param name="mlsMessageBytes">The serialized MLS message bytes to encrypt.</param>
     /// <param name="groupId">The group identifier bytes (used as the "h" tag value in hex).</param>
     /// <param name="encryptionKey">
-    /// 32-byte symmetric key derived from the MLS exporter secret, used as the NIP-44 conversation key.
-    /// </param>
-    /// <param name="ephemeralPrivateKey">
-    /// 32-byte ephemeral secp256k1 private key used for the NIP-44 encryption step.
-    /// Not used directly for encryption when a pre-derived conversation key is provided,
-    /// but included for protocol compatibility.
+    /// 32-byte symmetric key derived via MLS-Exporter("marmot", "group-event", 32),
+    /// used directly as the ChaCha20-Poly1305 key.
     /// </param>
     /// <returns>
-    /// A tuple of (content, tags) where content is the NIP-44 encrypted MLS message
+    /// A tuple of (content, tags) where content is base64(nonce || ciphertext)
     /// and tags contains the group hash and encoding metadata.
     /// </returns>
     /// <exception cref="ArgumentNullException">Thrown when any parameter is null.</exception>
-    /// <exception cref="ArgumentException">Thrown when mlsMessageBytes is empty or key lengths are invalid.</exception>
+    /// <exception cref="ArgumentException">Thrown when mlsMessageBytes is empty or key length is invalid.</exception>
+    /// <exception cref="CryptographicException">Thrown when encryption fails.</exception>
     public static (string content, string[][] tags) BuildGroupEvent(
         byte[] mlsMessageBytes,
         byte[] groupId,
-        byte[] encryptionKey,
-        byte[] ephemeralPrivateKey)
+        byte[] encryptionKey)
     {
         ArgumentNullException.ThrowIfNull(mlsMessageBytes);
         ArgumentNullException.ThrowIfNull(groupId);
         ArgumentNullException.ThrowIfNull(encryptionKey);
-        ArgumentNullException.ThrowIfNull(ephemeralPrivateKey);
 
         if (mlsMessageBytes.Length == 0)
             throw new ArgumentException("MLS message bytes must not be empty.", nameof(mlsMessageBytes));
         if (encryptionKey.Length != 32)
             throw new ArgumentException("Encryption key must be 32 bytes.", nameof(encryptionKey));
-        if (ephemeralPrivateKey.Length != 32)
-            throw new ArgumentException("Ephemeral private key must be 32 bytes.", nameof(ephemeralPrivateKey));
 
-        // Encrypt the MLS message using NIP-44 with the exporter-derived key as conversation key
-        string mlsBase64 = Convert.ToBase64String(mlsMessageBytes);
-        string encryptedContent = Nip44Encryption.Encrypt(mlsBase64, encryptionKey);
+        // Encrypt the MLS message using ChaCha20-Poly1305 per MIP-03
+        // content = base64(nonce || ciphertext) where ciphertext includes the 16-byte auth tag
+        string encryptedContent = GroupEventEncryption.Encrypt(mlsMessageBytes, encryptionKey);
 
         // Group ID as hex string for the "h" tag
         string groupIdHex = Convert.ToHexString(groupId).ToLowerInvariant();
 
-        string[][] tags = new[]
-        {
-            new[] { "h", groupIdHex },
-            new[] { "encoding", "mls" }
-        };
+        string[][] tags =
+        [
+            ["h", groupIdHex],
+            ["encoding", "base64"]
+        ];
 
         return (encryptedContent, tags);
     }
