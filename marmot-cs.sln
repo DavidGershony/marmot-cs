@@ -5,23 +5,23 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Protocol", "src\MarmotMdk.Protocol\MarmotMdk.Protocol.csproj", "{8AD53E9C-E169-4DA5-8F74-0A30C2BFC03D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Protocol", "src\MarmotCs.Protocol\MarmotCs.Protocol.csproj", "{8AD53E9C-E169-4DA5-8F74-0A30C2BFC03D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Storage.Abstractions", "src\MarmotMdk.Storage.Abstractions\MarmotMdk.Storage.Abstractions.csproj", "{677D07E2-F215-4CA7-8B6A-ED47ABDDB401}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Storage.Abstractions", "src\MarmotCs.Storage.Abstractions\MarmotCs.Storage.Abstractions.csproj", "{677D07E2-F215-4CA7-8B6A-ED47ABDDB401}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Storage.Memory", "src\MarmotMdk.Storage.Memory\MarmotMdk.Storage.Memory.csproj", "{706C22B8-F875-4950-959F-4DAC23030011}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Storage.Memory", "src\MarmotCs.Storage.Memory\MarmotCs.Storage.Memory.csproj", "{706C22B8-F875-4950-959F-4DAC23030011}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Storage.Sqlite", "src\MarmotMdk.Storage.Sqlite\MarmotMdk.Storage.Sqlite.csproj", "{57448D5E-B5DF-48BF-B832-D51F93DD611E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Storage.Sqlite", "src\MarmotCs.Storage.Sqlite\MarmotCs.Storage.Sqlite.csproj", "{57448D5E-B5DF-48BF-B832-D51F93DD611E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Core", "src\MarmotMdk.Core\MarmotMdk.Core.csproj", "{F5806994-9655-4535-9F57-6B1773904D09}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Core", "src\MarmotCs.Core\MarmotCs.Core.csproj", "{F5806994-9655-4535-9F57-6B1773904D09}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Protocol.Tests", "tests\MarmotMdk.Protocol.Tests\MarmotMdk.Protocol.Tests.csproj", "{85F26861-A810-46F3-97AC-E071336D2281}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Protocol.Tests", "tests\MarmotCs.Protocol.Tests\MarmotCs.Protocol.Tests.csproj", "{85F26861-A810-46F3-97AC-E071336D2281}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Storage.Tests", "tests\MarmotMdk.Storage.Tests\MarmotMdk.Storage.Tests.csproj", "{18C20236-C5D7-43AE-8FF4-FE3F1D5A8C12}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Storage.Tests", "tests\MarmotCs.Storage.Tests\MarmotCs.Storage.Tests.csproj", "{18C20236-C5D7-43AE-8FF4-FE3F1D5A8C12}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Core.Tests", "tests\MarmotMdk.Core.Tests\MarmotMdk.Core.Tests.csproj", "{3E91F14C-B408-4460-B790-59A39BB7A2FC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Core.Tests", "tests\MarmotCs.Core.Tests\MarmotCs.Core.Tests.csproj", "{3E91F14C-B408-4460-B790-59A39BB7A2FC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotMdk.Integration.Tests", "tests\MarmotMdk.Integration.Tests\MarmotMdk.Integration.Tests.csproj", "{168D7A90-0BFF-42F3-B51F-3DCA3B5FCC48}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarmotCs.Integration.Tests", "tests\MarmotCs.Integration.Tests\MarmotCs.Integration.Tests.csproj", "{168D7A90-0BFF-42F3-B51F-3DCA3B5FCC48}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

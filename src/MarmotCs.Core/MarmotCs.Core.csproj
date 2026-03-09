@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MarmotCs.Core.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="DotnetMls" Version="0.1.*-*" />
+    <ProjectReference Include="..\MarmotCs.Protocol\MarmotCs.Protocol.csproj" />
+    <ProjectReference Include="..\MarmotCs.Storage.Abstractions\MarmotCs.Storage.Abstractions.csproj" />
+    <PackageReference Include="Nostr.Client" Version="2.1.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+  </ItemGroup>
+</Project>

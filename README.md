@@ -1,4 +1,4 @@
-# Marmot MDK (C#)
+# Marmot CS (C#)
 
 A C# implementation of the [Marmot Messaging Development Kit](https://github.com/DavidGershony/marmot-cs) — a secure group messaging library that combines [MLS (Message Layer Security, RFC 9420)](https://www.rfc-editor.org/rfc/rfc9420) with the [Nostr](https://nostr.com/) decentralised network.
 
@@ -35,7 +35,7 @@ A C# implementation of the [Marmot Messaging Development Kit](https://github.com
 
 ## Overview
 
-Marmot MDK provides a high-level API for secure, end-to-end encrypted **group messaging**:
+Marmot CS provides a high-level API for secure, end-to-end encrypted **group messaging**:
 
 - **MLS (RFC 9420)** handles all cryptographic group state: key agreement, forward secrecy, post-compromise security, member additions/removals, and epoch management.
 - **Nostr** is used as the transport and identity layer. Group events, key packages, and Welcome messages are published as Nostr events (kinds 443, 444, 445) using the Marmot Improvement Proposals (MIPs) defined in this library.
@@ -47,7 +47,7 @@ Marmot MDK provides a high-level API for secure, end-to-end encrypted **group me
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                MarmotMdk.Core (Public API)               │
+│                MarmotCs.Core (Public API)               │
 │          Mdk<TStorage>  ·  MdkBuilder  ·  MdkConfig     │
 └──────────────────────┬──────────────────────────────────┘
                        │
@@ -80,11 +80,11 @@ Marmot MDK provides a high-level API for secure, end-to-end encrypted **group me
 
 | NuGet Package | Description |
 |---|---|
-| `MarmotMdk.Core` | Main public API — `Mdk<TStorage>`, `MdkBuilder`, `MdkConfig` |
-| `MarmotMdk.Protocol` | Nostr event codecs (MIP-00 … MIP-03), NIP-44 / NIP-59 crypto |
-| `MarmotMdk.Storage.Abstractions` | Interfaces — reference when writing a custom backend |
-| `MarmotMdk.Storage.Memory` | Thread-safe in-memory storage (testing / short-lived) |
-| `MarmotMdk.Storage.Sqlite` | SQLite storage with WAL mode and auto-migration |
+| `MarmotCs.Core` | Main public API — `Mdk<TStorage>`, `MdkBuilder`, `MdkConfig` |
+| `MarmotCs.Protocol` | Nostr event codecs (MIP-00 … MIP-03), NIP-44 / NIP-59 crypto |
+| `MarmotCs.Storage.Abstractions` | Interfaces — reference when writing a custom backend |
+| `MarmotCs.Storage.Memory` | Thread-safe in-memory storage (testing / short-lived) |
+| `MarmotCs.Storage.Sqlite` | SQLite storage with WAL mode and auto-migration |
 
 All packages target **net9.0** and are published to the [GitHub Packages registry](https://github.com/DavidGershony/marmot-cs/pkgs/nuget).
 
@@ -101,8 +101,8 @@ All packages target **net9.0** and are published to the [GitHub Packages registr
 ### 1. Build an `Mdk` instance
 
 ```csharp
-using MarmotMdk.Core;
-using MarmotMdk.Storage.Memory;
+using MarmotCs.Core;
+using MarmotCs.Storage.Memory;
 
 var mdk = new MdkBuilder<MemoryStorageProvider>()
     .WithStorage(new MemoryStorageProvider())
@@ -113,8 +113,8 @@ var mdk = new MdkBuilder<MemoryStorageProvider>()
 Using SQLite for production:
 
 ```csharp
-using MarmotMdk.Core;
-using MarmotMdk.Storage.Sqlite;
+using MarmotCs.Core;
+using MarmotCs.Storage.Sqlite;
 
 var mdk = new MdkBuilder<SqliteStorageProvider>()
     .WithStorage(new SqliteStorageProvider("marmot.db"))
@@ -232,7 +232,7 @@ var storage = new SqliteStorageProvider("path/to/marmot.db");
 
 ### Custom backend
 
-Implement `IMdkStorageProvider` (from `MarmotMdk.Storage.Abstractions`) along with its sub-interfaces:
+Implement `IMdkStorageProvider` (from `MarmotCs.Storage.Abstractions`) along with its sub-interfaces:
 
 | Interface | Responsibility |
 |---|---|
@@ -298,7 +298,7 @@ var mdk = new MdkBuilder<MemoryStorageProvider>()
 
 ## Protocol Layer — Nostr / MIPs
 
-The `MarmotMdk.Protocol` project implements the Nostr wire format for Marmot group events.
+The `MarmotCs.Protocol` project implements the Nostr wire format for Marmot group events.
 
 | MIP | Nostr Kind | Purpose |
 |---|---|---|
@@ -357,10 +357,10 @@ Test projects:
 
 | Project | Scope |
 |---|---|
-| `MarmotMdk.Protocol.Tests` | NIP-44 encryption, NIP-59 wrapping, MIP codecs |
-| `MarmotMdk.Storage.Tests` | `MemoryStorageProvider` and `SqliteStorageProvider` |
-| `MarmotMdk.Core.Tests` | Config defaults, builder validation |
-| `MarmotMdk.Integration.Tests` | End-to-end: group creation, messaging, Welcome flow, member management |
+| `MarmotCs.Protocol.Tests` | NIP-44 encryption, NIP-59 wrapping, MIP codecs |
+| `MarmotCs.Storage.Tests` | `MemoryStorageProvider` and `SqliteStorageProvider` |
+| `MarmotCs.Core.Tests` | Config defaults, builder validation |
+| `MarmotCs.Integration.Tests` | End-to-end: group creation, messaging, Welcome flow, member management |
 
 ---
 
