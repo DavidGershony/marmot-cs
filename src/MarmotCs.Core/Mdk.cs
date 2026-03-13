@@ -348,6 +348,27 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         }
     }
 
+    // ====== MIP-03 Crypto ======
+
+    /// <summary>
+    /// Returns the MIP-03 exporter secret for the given group.
+    /// This is <c>MLS-Exporter("marmot", "group-event", 32)</c> from the current epoch.
+    /// </summary>
+    /// <param name="groupId">The group identifier bytes.</param>
+    /// <returns>The 32-byte exporter secret.</returns>
+    /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
+    public byte[] GetExporterSecret(byte[] groupId)
+    {
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        return mlsGroup.ExportSecret(
+            Mip03Crypto.ExporterLabel,
+            Mip03Crypto.ExporterContext,
+            Mip03Crypto.ExporterLength);
+    }
+
     // ====== Messages ======
 
     /// <summary>
@@ -421,26 +442,47 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
 
         try
         {
-            // Strip MLSMessage envelope if present (Rust/OpenMLS wraps messages)
-            byte[] rawMessageBytes = messageBytes;
+            // Parse message: either wrapped in MLSMessage envelope or raw TLS bytes
+            PrivateMessage? privateMsg = null;
+            PublicMessage? publicMsg = null;
+
             if (messageBytes.Length >= 4 && messageBytes[0] == 0x00 && messageBytes[1] == 0x01)
             {
+                // MLSMessage envelope — the wire_format tells us the type directly
                 var envReader = new TlsReader(messageBytes);
                 var mlsMsg = MlsMessage.ReadFrom(envReader);
-                rawMessageBytes = mlsMsg.Body switch
+                switch (mlsMsg.Body)
                 {
-                    PrivateMessage pm => TlsCodec.Serialize(w => pm.WriteTo(w)),
-                    PublicMessage pub => TlsCodec.Serialize(w => pub.WriteTo(w)),
-                    _ => throw new InvalidOperationException(
-                        $"Unsupported MLSMessage wire format: {mlsMsg.WireFormat}")
-                };
+                    case PrivateMessage pm:
+                        privateMsg = pm;
+                        break;
+                    case PublicMessage pub:
+                        publicMsg = pub;
+                        break;
+                    default:
+                        return new UnprocessableResult(
+                            $"Unsupported MLSMessage wire format: {mlsMsg.WireFormat}");
+                }
+            }
+            else
+            {
+                // Raw TLS bytes — try PrivateMessage first, fall back to PublicMessage
+                try
+                {
+                    var reader = new TlsReader(messageBytes);
+                    privateMsg = PrivateMessage.ReadFrom(reader);
+                }
+                catch (Exception parseEx)
+                {
+                    _logger.LogDebug(parseEx, "Not a PrivateMessage, trying PublicMessage");
+                    var reader = new TlsReader(messageBytes);
+                    publicMsg = PublicMessage.ReadFrom(reader);
+                }
             }
 
-            // Try to parse as PrivateMessage (application data) first
-            try
+            // Process based on parsed type
+            if (privateMsg != null)
             {
-                var reader = new TlsReader(rawMessageBytes);
-                var privateMsg = PrivateMessage.ReadFrom(reader);
                 var (plaintext, senderLeaf) = mlsGroup.DecryptApplicationMessage(privateMsg);
 
                 var members = mlsGroup.GetMembers();
@@ -457,18 +499,14 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
                     CreatedAt: DateTimeOffset.UtcNow);
 
                 await _storage.Messages.SaveMessageAsync(message, ct);
-
                 await _storage.Messages.SaveProcessedMessageAsync(
                     new ProcessedMessage(eventId, gid, ProcessedMessageState.Completed, DateTimeOffset.UtcNow), ct);
 
                 return new ApplicationMessageResult(message);
             }
-            catch
-            {
-                // Try as PublicMessage (commit/proposal)
-                var reader = new TlsReader(rawMessageBytes);
-                var publicMsg = PublicMessage.ReadFrom(reader);
 
+            if (publicMsg != null)
+            {
                 if (publicMsg.Content.ContentType == ContentType.Commit)
                 {
                     var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
@@ -498,15 +536,19 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
                         var group = await _storage.Groups.GetGroupAsync(gid, ct);
                         return new CommitResult(group!);
                     }
-                    catch
+                    catch (Exception commitEx)
                     {
+                        _logger.LogWarning(commitEx, "Commit processing failed for group {GroupId}, rolling back", hex);
                         await _snapshots.RollbackAsync(snapshotId, ct);
                         throw;
                     }
                 }
 
-                return new UnprocessableResult("Unsupported message type");
+                return new UnprocessableResult(
+                    $"PublicMessage with unsupported ContentType: {publicMsg.Content.ContentType}");
             }
+
+            return new UnprocessableResult("Could not parse message as PrivateMessage or PublicMessage");
         }
         catch (DuplicateMessageException)
         {
@@ -632,8 +674,18 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         {
             if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
             {
-                var ngd = NostrGroupDataExtension.FromExtension(ext);
-                groupName = ngd.Name;
+                _logger.LogDebug("0xF2EE extension data ({Len} bytes): {Hex}",
+                    ext.ExtensionData.Length,
+                    Convert.ToHexString(ext.ExtensionData[..Math.Min(128, ext.ExtensionData.Length)]));
+                try
+                {
+                    var ngd = NostrGroupDataExtension.FromExtension(ext);
+                    groupName = ngd.Name;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to decode NostrGroupData from 0xF2EE extension ({Len} bytes)", ext.ExtensionData.Length);
+                }
                 break;
             }
         }
@@ -709,8 +761,15 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         {
             if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
             {
-                var ngd = NostrGroupDataExtension.FromExtension(ext);
-                groupName = ngd.Name;
+                try
+                {
+                    var ngd = NostrGroupDataExtension.FromExtension(ext);
+                    groupName = ngd.Name;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to decode NostrGroupData from 0xF2EE extension in AcceptWelcome");
+                }
                 break;
             }
         }

@@ -8,6 +8,7 @@
     <InternalsVisibleTo Include="MarmotCs.Core.Tests" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
     <PackageReference Include="DotnetMls" Version="0.1.*-*" />
     <ProjectReference Include="..\MarmotCs.Protocol\MarmotCs.Protocol.csproj" />
     <ProjectReference Include="..\MarmotCs.Storage.Abstractions\MarmotCs.Storage.Abstractions.csproj" />
