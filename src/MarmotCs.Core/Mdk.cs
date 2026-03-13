@@ -421,10 +421,25 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
 
         try
         {
+            // Strip MLSMessage envelope if present (Rust/OpenMLS wraps messages)
+            byte[] rawMessageBytes = messageBytes;
+            if (messageBytes.Length >= 4 && messageBytes[0] == 0x00 && messageBytes[1] == 0x01)
+            {
+                var envReader = new TlsReader(messageBytes);
+                var mlsMsg = MlsMessage.ReadFrom(envReader);
+                rawMessageBytes = mlsMsg.Body switch
+                {
+                    PrivateMessage pm => TlsCodec.Serialize(w => pm.WriteTo(w)),
+                    PublicMessage pub => TlsCodec.Serialize(w => pub.WriteTo(w)),
+                    _ => throw new InvalidOperationException(
+                        $"Unsupported MLSMessage wire format: {mlsMsg.WireFormat}")
+                };
+            }
+
             // Try to parse as PrivateMessage (application data) first
             try
             {
-                var reader = new TlsReader(messageBytes);
+                var reader = new TlsReader(rawMessageBytes);
                 var privateMsg = PrivateMessage.ReadFrom(reader);
                 var (plaintext, senderLeaf) = mlsGroup.DecryptApplicationMessage(privateMsg);
 
@@ -451,7 +466,7 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
             catch
             {
                 // Try as PublicMessage (commit/proposal)
-                var reader = new TlsReader(messageBytes);
+                var reader = new TlsReader(rawMessageBytes);
                 var publicMsg = PublicMessage.ReadFrom(reader);
 
                 if (publicMsg.Content.ContentType == ContentType.Commit)
@@ -617,8 +632,15 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         {
             if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
             {
-                var ngd = NostrGroupDataExtension.FromExtension(ext);
-                groupName = ngd.Name;
+                try
+                {
+                    var ngd = NostrGroupDataExtension.FromExtension(ext);
+                    groupName = ngd.Name;
+                }
+                catch (FormatException ex)
+                {
+                    _logger.LogWarning(ex, "Failed to decode NostrGroupData from 0xF2EE extension");
+                }
                 break;
             }
         }
@@ -694,8 +716,15 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         {
             if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
             {
-                var ngd = NostrGroupDataExtension.FromExtension(ext);
-                groupName = ngd.Name;
+                try
+                {
+                    var ngd = NostrGroupDataExtension.FromExtension(ext);
+                    groupName = ngd.Name;
+                }
+                catch (FormatException ex)
+                {
+                    _logger.LogWarning(ex, "Failed to decode NostrGroupData from 0xF2EE extension");
+                }
                 break;
             }
         }
