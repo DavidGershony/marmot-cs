@@ -438,12 +438,12 @@ public class Mip01Tests
     }
 
     [Fact]
-    public void NostrGroupDataCodec_WrongVersion_ThrowsOnDecode()
+    public void NostrGroupDataCodec_Version0_ThrowsOnDecode()
     {
-        // Encode version as 1 (unsupported)
+        // Version 0 is rejected (same as Rust MDK)
         var encoded = TlsCodec.Serialize(w =>
         {
-            QuicVarint.Write(w, 1); // version 1
+            w.WriteUint16(0); // version 0
         });
 
         Assert.Throws<FormatException>(() => NostrGroupDataCodec.Decode(encoded));

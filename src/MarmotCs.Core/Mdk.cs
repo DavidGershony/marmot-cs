@@ -632,15 +632,8 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         {
             if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
             {
-                try
-                {
-                    var ngd = NostrGroupDataExtension.FromExtension(ext);
-                    groupName = ngd.Name;
-                }
-                catch (FormatException ex)
-                {
-                    _logger.LogWarning(ex, "Failed to decode NostrGroupData from 0xF2EE extension");
-                }
+                var ngd = NostrGroupDataExtension.FromExtension(ext);
+                groupName = ngd.Name;
                 break;
             }
         }
@@ -716,15 +709,8 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         {
             if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
             {
-                try
-                {
-                    var ngd = NostrGroupDataExtension.FromExtension(ext);
-                    groupName = ngd.Name;
-                }
-                catch (FormatException ex)
-                {
-                    _logger.LogWarning(ex, "Failed to decode NostrGroupData from 0xF2EE extension");
-                }
+                var ngd = NostrGroupDataExtension.FromExtension(ext);
+                groupName = ngd.Name;
                 break;
             }
         }
