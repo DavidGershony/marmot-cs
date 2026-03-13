@@ -581,8 +581,8 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
     /// </summary>
     /// <param name="content">The base64-encoded event content.</param>
     /// <param name="tags">The event tags.</param>
-    /// <returns>The parsed key package bytes, identity hex, and relay URLs.</returns>
-    public (byte[] keyPackageBytes, string identityHex, string[] relays) ParseKeyPackageEvent(
+    /// <returns>The parsed key package bytes, KeyPackageRef hex, and relay URLs.</returns>
+    public (byte[] keyPackageBytes, string keyPackageRefHex, string[] relays) ParseKeyPackageEvent(
         string content, string[][] tags)
     {
         return KeyPackageEventParser.ParseKeyPackageEvent(content, tags);

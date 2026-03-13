@@ -7,17 +7,18 @@ public static class KeyPackageEventParser
 {
     /// <summary>
     /// Parses a kind 443 Nostr event's content and tags to extract the KeyPackage bytes,
-    /// identity hex, and relay URLs.
+    /// KeyPackageRef hex, and relay URLs.
     /// </summary>
     /// <param name="content">The base64-encoded content of the Nostr event.</param>
     /// <param name="tags">The tags array from the Nostr event.</param>
     /// <returns>
-    /// A tuple of (keyPackageBytes, identityHex, relays) where keyPackageBytes is the decoded
-    /// MLS KeyPackage, identityHex is the identity string, and relays is the array of relay URLs.
+    /// A tuple of (keyPackageBytes, keyPackageRefHex, relays) where keyPackageBytes is the decoded
+    /// MLS KeyPackage, keyPackageRefHex is the hex-encoded KeyPackageRef hash, and relays is the
+    /// array of relay URLs.
     /// </returns>
     /// <exception cref="ArgumentNullException">Thrown when content or tags is null.</exception>
     /// <exception cref="FormatException">Thrown when the event format is invalid or required tags are missing.</exception>
-    public static (byte[] keyPackageBytes, string identityHex, string[] relays) ParseKeyPackageEvent(
+    public static (byte[] keyPackageBytes, string keyPackageRefHex, string[] relays) ParseKeyPackageEvent(
         string content, string[][] tags)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -42,19 +43,19 @@ public static class KeyPackageEventParser
         if (keyPackageBytes.Length == 0)
             throw new FormatException("Key package content is empty.");
 
-        // Extract identity from the "i" tag: ["i", identity_hex, "mls"]
-        string? identityHex = null;
+        // Extract KeyPackageRef from the "i" tag: ["i", kp_ref_hex]
+        string? kpRefHex = null;
         foreach (string[] tag in tags)
         {
-            if (tag.Length >= 3 && tag[0] == "i" && tag[2] == "mls")
+            if (tag.Length == 2 && tag[0] == "i")
             {
-                identityHex = tag[1];
+                kpRefHex = tag[1];
                 break;
             }
         }
 
-        if (string.IsNullOrEmpty(identityHex))
-            throw new FormatException("Missing or empty 'i' tag with 'mls' marker.");
+        if (string.IsNullOrEmpty(kpRefHex))
+            throw new FormatException("Missing or empty 'i' tag.");
 
         // Extract relays from the "relays" tag: ["relays", relay1, relay2, ...]
         string[] relays = Array.Empty<string>();
@@ -68,7 +69,7 @@ public static class KeyPackageEventParser
             }
         }
 
-        return (keyPackageBytes, identityHex, relays);
+        return (keyPackageBytes, kpRefHex, relays);
     }
 
     private static string? FindTagValue(string[][] tags, string tagName)

@@ -1,3 +1,6 @@
+using DotnetMls.Crypto;
+using DotnetMls.Types;
+
 namespace MarmotCs.Protocol.Mip00;
 
 /// <summary>
@@ -7,7 +10,7 @@ namespace MarmotCs.Protocol.Mip00;
 /// MIP-00 defines the format for publishing MLS KeyPackages to Nostr relays:
 /// <list type="bullet">
 ///   <item>Content: base64-encoded MLS KeyPackage bytes.</item>
-///   <item>Tags: encoding, protocol_version, ciphersuite, extensions, relays, and identity.</item>
+///   <item>Tags: encoding, protocol_version, ciphersuite, extensions, relays, and i (KeyPackageRef).</item>
 /// </list>
 /// </remarks>
 public static class KeyPackageEventBuilder
@@ -40,6 +43,12 @@ public static class KeyPackageEventBuilder
 
         string content = Convert.ToBase64String(keyPackageBytes);
 
+        // Compute KeyPackageRef per RFC 9420 Section 5.2:
+        // MakeKeyPackageRef(value) = RefHash("MLS 1.0 KeyPackage Reference", value)
+        var cs = new CipherSuite0x0001();
+        var kpRef = KeyPackageRef.Compute(cs, keyPackageBytes);
+        string kpRefHex = Convert.ToHexString(kpRef.Value).ToLowerInvariant();
+
         // Build the relays tag: ["relays", relay1, relay2, ...]
         string[] relaysTag = new string[1 + relays.Length];
         relaysTag[0] = "relays";
@@ -52,7 +61,7 @@ public static class KeyPackageEventBuilder
             new[] { "ciphersuite", "1" },
             new[] { "extensions", "" },
             relaysTag,
-            new[] { "i", identityHex, "mls" }
+            new[] { "i", kpRefHex }
         };
 
         return (content, tags);

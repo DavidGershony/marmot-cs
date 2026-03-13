@@ -250,12 +250,27 @@ public class Mip00Tests
         Assert.NotEmpty(tags);
 
         // Parse it back
-        var (parsedBytes, parsedId, parsedRelays) =
+        var (parsedBytes, parsedKpRef, parsedRelays) =
             KeyPackageEventParser.ParseKeyPackageEvent(content, tags);
 
         Assert.Equal(kpBytes, parsedBytes);
-        Assert.Equal(identity, parsedId);
+        // The i tag now contains the KeyPackageRef hash, not the identity
+        Assert.NotEmpty(parsedKpRef);
         Assert.Equal(relays, parsedRelays);
+    }
+
+    [Fact]
+    public void Build_ITagContainsKeyPackageRef()
+    {
+        byte[] kpBytes = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
+        var (_, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(kpBytes, "abc123", Array.Empty<string>());
+
+        var iTag = tags.First(t => t[0] == "i");
+        // Must be exactly 2 elements: ["i", "<hex>"]
+        Assert.Equal(2, iTag.Length);
+        // Value must be valid hex
+        Assert.NotEmpty(iTag[1]);
+        Convert.FromHexString(iTag[1]);
     }
 
     [Fact]
@@ -288,7 +303,7 @@ public class Mip00Tests
         string content = Convert.ToBase64String(new byte[] { 1, 2, 3 });
         string[][] tags = new[]
         {
-            new[] { "i", "abc123", "mls" }
+            new[] { "i", "abcdef01" }
         };
 
         Assert.Throws<FormatException>(() =>
@@ -296,7 +311,7 @@ public class Mip00Tests
     }
 
     [Fact]
-    public void Parse_MissingIdentityTag_Throws()
+    public void Parse_MissingITag_Throws()
     {
         string content = Convert.ToBase64String(new byte[] { 1 });
         string[][] tags = new[]
