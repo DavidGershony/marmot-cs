@@ -466,11 +466,21 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
             }
             else
             {
-                // Raw TLS bytes — try PrivateMessage first, fall back to PublicMessage
+                // Raw TLS bytes — try PrivateMessage first, fall back to PublicMessage.
+                // PrivateMessage.ReadFrom can spuriously succeed on PublicMessage bytes
+                // (SenderType.Member == ContentType.Application == 0x01), so we verify
+                // that all bytes were consumed before accepting the parse.
                 try
                 {
                     var reader = new TlsReader(messageBytes);
                     privateMsg = PrivateMessage.ReadFrom(reader);
+                    if (!reader.IsEmpty)
+                    {
+                        _logger.LogDebug("PrivateMessage parse left {Remaining} bytes unconsumed, trying PublicMessage", reader.Remaining);
+                        privateMsg = null;
+                        var pubReader = new TlsReader(messageBytes);
+                        publicMsg = PublicMessage.ReadFrom(pubReader);
+                    }
                 }
                 catch (Exception parseEx)
                 {
