@@ -45,7 +45,7 @@ public static class WelcomeEventBuilder
         {
             new[] { "e", keyPackageEventId },
             relaysTag,
-            new[] { "encoding", "mls-base64" }
+            new[] { "encoding", "base64" }
         };
 
         return (content, tags);

@@ -508,7 +508,7 @@ public class Mip02Tests
             new byte[] { 1 }, "event123", Array.Empty<string>());
 
         var encoding = tags.First(t => t[0] == "encoding");
-        Assert.Equal("mls-base64", encoding[1]);
+        Assert.Equal("base64", encoding[1]);
     }
 
     [Fact]
