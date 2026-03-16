@@ -2,15 +2,25 @@
 bin/
 obj/
 
+## NuGet packages (local feed)
+nupkgs/
+*.nupkg
+
 ## IDE
 .idea/
 .vs/
+.vscode/
 *.user
+*.rsuser
 *.suo
 
 ## OS
 Thumbs.db
+Desktop.ini
 .DS_Store
 
 ## Claude Code
 .claude/
+
+## Misc
+*.log
