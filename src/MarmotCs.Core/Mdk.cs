@@ -79,11 +79,34 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
             MaxForwardDistance = _config.MaxForwardDistance
         };
 
-        // Include NostrGroupData extension so the group name is transmitted in Welcomes
+        // Generate a random 32-byte Nostr group ID for event routing (h-tag in kind 445)
+        var nostrGroupId = new byte[32];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(nostrGroupId);
+
+        // Include NostrGroupData extension so the group name is transmitted in Welcomes.
+        // AdminPubkeys: use the identity if it's exactly 32 bytes (raw Nostr pubkey),
+        // or try to decode it as hex if it's 64 bytes (hex-encoded pubkey).
+        byte[] adminPubkeys;
+        if (identity.Length == 32)
+        {
+            adminPubkeys = identity;
+        }
+        else if (identity.Length == 64)
+        {
+            try { adminPubkeys = Convert.FromHexString(System.Text.Encoding.UTF8.GetString(identity)); }
+            catch { adminPubkeys = Array.Empty<byte>(); }
+        }
+        else
+        {
+            adminPubkeys = Array.Empty<byte>();
+        }
+
         var groupDataExt = NostrGroupDataExtension.ToExtension(new NostrGroupData
         {
             Name = groupName,
-            Relays = relays
+            Relays = relays,
+            NostrGroupId = nostrGroupId,
+            AdminPubkeys = adminPubkeys
         });
 
         var mlsGroup = MlsGroup.CreateGroup(
