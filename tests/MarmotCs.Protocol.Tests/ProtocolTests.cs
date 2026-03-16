@@ -523,6 +523,129 @@ public class Mip01Tests
         Assert.Equal(data.Name, decoded.Name);
         Assert.Equal(data.Description, decoded.Description);
     }
+
+    [Fact]
+    public void NostrGroupDataCodec_Version1_DecodeOmitsImageUploadKey()
+    {
+        var data = new NostrGroupData
+        {
+            Name = "V1 Group",
+            Description = "",
+            Version = 1
+        };
+
+        byte[] encoded = NostrGroupDataCodec.Encode(data);
+        var decoded = NostrGroupDataCodec.Decode(encoded);
+
+        Assert.Equal(1, decoded.Version);
+        Assert.Equal("V1 Group", decoded.Name);
+        Assert.Empty(decoded.ImageUploadKey);
+    }
+
+    [Fact]
+    public void NostrGroupDataCodec_Version2_IncludesImageUploadKey()
+    {
+        var uploadKey = new byte[32];
+        uploadKey[0] = 0xCC;
+
+        var data = new NostrGroupData
+        {
+            Name = "V2 Group",
+            Version = 2,
+            ImageUploadKey = uploadKey
+        };
+
+        byte[] encoded = NostrGroupDataCodec.Encode(data);
+        var decoded = NostrGroupDataCodec.Decode(encoded);
+
+        Assert.Equal(2, decoded.Version);
+        Assert.Equal(uploadKey, decoded.ImageUploadKey);
+    }
+
+    [Fact]
+    public void NostrGroupDataCodec_NostrGroupIdNot32Bytes_Throws()
+    {
+        var data = new NostrGroupData
+        {
+            NostrGroupId = new byte[16] // Wrong size
+        };
+
+        Assert.Throws<ArgumentException>(() => NostrGroupDataCodec.Encode(data));
+    }
+
+    [Fact]
+    public void NostrGroupDataCodec_NostrGroupIdPreserved()
+    {
+        var groupId = new byte[32];
+        new Random(42).NextBytes(groupId);
+
+        var data = new NostrGroupData
+        {
+            NostrGroupId = groupId,
+            Name = "ID Test"
+        };
+
+        byte[] encoded = NostrGroupDataCodec.Encode(data);
+        var decoded = NostrGroupDataCodec.Decode(encoded);
+
+        Assert.Equal(groupId, decoded.NostrGroupId);
+    }
+
+    [Fact]
+    public void NostrGroupDataCodec_WireFormat_VersionAndGroupIdFirst()
+    {
+        var groupId = new byte[32];
+        groupId[0] = 0xDE;
+        groupId[31] = 0xAD;
+
+        var data = new NostrGroupData
+        {
+            Version = 2,
+            NostrGroupId = groupId,
+            Name = "",
+            Description = ""
+        };
+
+        byte[] encoded = NostrGroupDataCodec.Encode(data);
+
+        // First 2 bytes: version (u16 big-endian) = 0x0002
+        Assert.Equal(0x00, encoded[0]);
+        Assert.Equal(0x02, encoded[1]);
+
+        // Next 32 bytes: nostr_group_id
+        Assert.Equal(0xDE, encoded[2]);
+        Assert.Equal(0xAD, encoded[33]);
+    }
+
+    [Fact]
+    public void NostrGroupDataCodec_ImageFields_RoundTrip()
+    {
+        var hash = new byte[32]; hash[0] = 0x11;
+        var key = new byte[32]; key[0] = 0x22;
+        var nonce = new byte[12]; nonce[0] = 0x33;
+
+        var data = new NostrGroupData
+        {
+            Name = "Image Test",
+            ImageHash = hash,
+            ImageKey = key,
+            ImageNonce = nonce,
+            Version = 2
+        };
+
+        byte[] encoded = NostrGroupDataCodec.Encode(data);
+        var decoded = NostrGroupDataCodec.Decode(encoded);
+
+        Assert.Equal(hash, decoded.ImageHash);
+        Assert.Equal(key, decoded.ImageKey);
+        Assert.Equal(nonce, decoded.ImageNonce);
+    }
+
+    [Fact]
+    public void NostrGroupDataExtension_ExtensionTypeIs0xF2EE()
+    {
+        Assert.Equal(0xF2EE, NostrGroupDataExtension.ExtensionType);
+    }
 }
 
 // ================================================================

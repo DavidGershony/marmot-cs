@@ -740,8 +740,12 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
 
         // Try to get group name from extensions
         string groupName = "";
+        _logger.LogDebug("PreviewWelcome: GroupContext has {ExtCount} extension(s)", mlsGroup.GroupContext.Extensions.Length);
         foreach (var ext in mlsGroup.GroupContext.Extensions)
         {
+            _logger.LogDebug("PreviewWelcome: extension type=0x{Type:X4}, data={Len} bytes",
+                ext.ExtensionType, ext.ExtensionData.Length);
+
             if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
             {
                 _logger.LogDebug("0xF2EE extension data ({Len} bytes): {Hex}",
@@ -751,6 +755,8 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
                 {
                     var ngd = NostrGroupDataExtension.FromExtension(ext);
                     groupName = ngd.Name;
+                    _logger.LogDebug("PreviewWelcome: decoded NostrGroupData name='{Name}', version={Version}",
+                        ngd.Name, ngd.Version);
                 }
                 catch (Exception ex)
                 {

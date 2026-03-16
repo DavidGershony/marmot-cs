@@ -8,18 +8,18 @@ namespace MarmotCs.Protocol.Mip01;
 /// matching the Rust MDK <c>TlsNostrGroupDataExtension</c> wire format exactly.
 /// </summary>
 /// <remarks>
-/// Wire format (all length prefixes are u16 big-endian):
+/// Wire format (all length prefixes are MLS VarInt per RFC 9000 Section 16):
 /// <list type="bullet">
 ///   <item>u16: version</item>
 ///   <item>[u8; 32]: nostr_group_id</item>
-///   <item>opaque&lt;2&gt;: name (UTF-8)</item>
-///   <item>opaque&lt;2&gt;: description (UTF-8)</item>
-///   <item>vector&lt;2&gt; of [u8; 32]: admin_pubkeys</item>
-///   <item>vector&lt;2&gt; of opaque&lt;2&gt;: relays (UTF-8 strings)</item>
-///   <item>opaque&lt;2&gt;: image_hash (0 or 32 bytes)</item>
-///   <item>opaque&lt;2&gt;: image_key (0 or 32 bytes)</item>
-///   <item>opaque&lt;2&gt;: image_nonce (0 or 12 bytes)</item>
-///   <item>opaque&lt;2&gt;: image_upload_key (0 or 32 bytes, v2 only)</item>
+///   <item>opaque&lt;V&gt;: name (UTF-8)</item>
+///   <item>opaque&lt;V&gt;: description (UTF-8)</item>
+///   <item>vector&lt;V&gt; of [u8; 32]: admin_pubkeys</item>
+///   <item>vector&lt;V&gt; of opaque&lt;V&gt;: relays (UTF-8 strings)</item>
+///   <item>opaque&lt;V&gt;: image_hash (0 or 32 bytes)</item>
+///   <item>opaque&lt;V&gt;: image_key (0 or 32 bytes)</item>
+///   <item>opaque&lt;V&gt;: image_nonce (0 or 12 bytes)</item>
+///   <item>opaque&lt;V&gt;: image_upload_key (0 or 32 bytes, v2 only)</item>
 /// </list>
 /// </remarks>
 public static class NostrGroupDataCodec
@@ -49,46 +49,39 @@ public static class NostrGroupDataCodec
         // nostr_group_id: [u8; 32]
         writer.WriteBytes(data.NostrGroupId);
 
-        // name: opaque<2>
-        WriteOpaque2(writer, Encoding.UTF8.GetBytes(data.Name));
+        // name: opaque<V>
+        writer.WriteOpaqueV(Encoding.UTF8.GetBytes(data.Name));
 
-        // description: opaque<2>
-        WriteOpaque2(writer, Encoding.UTF8.GetBytes(data.Description));
+        // description: opaque<V>
+        writer.WriteOpaqueV(Encoding.UTF8.GetBytes(data.Description));
 
-        // admin_pubkeys: vector<2> of [u8; 32]
-        // The u16 prefix is the total byte count of all keys
-        writer.WriteUint16((ushort)data.AdminPubkeys.Length);
+        // admin_pubkeys: vector<V> of [u8; 32]
+        writer.WriteVarIntLength(data.AdminPubkeys.Length);
         if (data.AdminPubkeys.Length > 0)
             writer.WriteBytes(data.AdminPubkeys);
 
-        // relays: vector<2> of opaque<2>
-        // Need to compute total byte length of all relay entries first
-        byte[][] relayBytes = new byte[data.Relays.Length][];
-        int totalRelayBytes = 0;
-        for (int i = 0; i < data.Relays.Length; i++)
+        // relays: vector<V> of opaque<V>
+        writer.WriteVectorV(inner =>
         {
-            relayBytes[i] = Encoding.UTF8.GetBytes(data.Relays[i]);
-            totalRelayBytes += 2 + relayBytes[i].Length; // u16 prefix + data
-        }
-        writer.WriteUint16((ushort)totalRelayBytes);
-        foreach (byte[] rb in relayBytes)
-        {
-            WriteOpaque2(writer, rb);
-        }
+            foreach (var relay in data.Relays)
+            {
+                inner.WriteOpaqueV(Encoding.UTF8.GetBytes(relay));
+            }
+        });
 
-        // image_hash: opaque<2>
-        WriteOpaque2(writer, data.ImageHash);
+        // image_hash: opaque<V>
+        writer.WriteOpaqueV(data.ImageHash);
 
-        // image_key: opaque<2>
-        WriteOpaque2(writer, data.ImageKey);
+        // image_key: opaque<V>
+        writer.WriteOpaqueV(data.ImageKey);
 
-        // image_nonce: opaque<2>
-        WriteOpaque2(writer, data.ImageNonce);
+        // image_nonce: opaque<V>
+        writer.WriteOpaqueV(data.ImageNonce);
 
-        // image_upload_key: opaque<2> (v2 only)
+        // image_upload_key: opaque<V> (v2 only)
         if (data.Version >= 2)
         {
-            WriteOpaque2(writer, data.ImageUploadKey);
+            writer.WriteOpaqueV(data.ImageUploadKey);
         }
 
         return writer.ToArray();
@@ -113,14 +106,14 @@ public static class NostrGroupDataCodec
         // nostr_group_id: [u8; 32]
         result.NostrGroupId = reader.ReadBytes(32);
 
-        // name: opaque<2>
-        result.Name = Encoding.UTF8.GetString(ReadOpaque2(reader));
+        // name: opaque<V>
+        result.Name = Encoding.UTF8.GetString(reader.ReadOpaqueV());
 
-        // description: opaque<2>
-        result.Description = Encoding.UTF8.GetString(ReadOpaque2(reader));
+        // description: opaque<V>
+        result.Description = Encoding.UTF8.GetString(reader.ReadOpaqueV());
 
-        // admin_pubkeys: vector<2> of [u8; 32]
-        ushort adminBytesLen = reader.ReadUint16();
+        // admin_pubkeys: vector<V> of [u8; 32]
+        int adminBytesLen = reader.ReadVarIntLength();
         if (adminBytesLen > 0)
         {
             if (adminBytesLen % 32 != 0)
@@ -129,50 +122,34 @@ public static class NostrGroupDataCodec
             result.AdminPubkeys = reader.ReadBytes(adminBytesLen);
         }
 
-        // relays: vector<2> of opaque<2>
-        ushort relayBytesLen = reader.ReadUint16();
+        // relays: vector<V> of opaque<V>
+        var relayReader = reader.ReadVectorV();
         var relays = new List<string>();
-        int relayBytesRead = 0;
-        while (relayBytesRead < relayBytesLen)
+        while (!relayReader.IsEmpty)
         {
-            ushort entryLen = reader.ReadUint16();
-            relayBytesRead += 2;
-            byte[] entryBytes = reader.ReadBytes(entryLen);
-            relayBytesRead += entryLen;
-            relays.Add(Encoding.UTF8.GetString(entryBytes));
+            var relayData = relayReader.ReadOpaqueV();
+            relays.Add(Encoding.UTF8.GetString(relayData));
         }
         result.Relays = relays.ToArray();
 
-        // image_hash: opaque<2>
-        result.ImageHash = ReadOpaque2(reader);
+        // image_hash: opaque<V>
+        if (reader.Remaining > 0)
+            result.ImageHash = reader.ReadOpaqueV();
 
-        // image_key: opaque<2>
-        result.ImageKey = ReadOpaque2(reader);
+        // image_key: opaque<V>
+        if (reader.Remaining > 0)
+            result.ImageKey = reader.ReadOpaqueV();
 
-        // image_nonce: opaque<2>
-        result.ImageNonce = ReadOpaque2(reader);
+        // image_nonce: opaque<V>
+        if (reader.Remaining > 0)
+            result.ImageNonce = reader.ReadOpaqueV();
 
-        // image_upload_key: opaque<2> (v2 only)
+        // image_upload_key: opaque<V> (v2 only)
         if (result.Version >= 2 && reader.Remaining > 0)
         {
-            result.ImageUploadKey = ReadOpaque2(reader);
+            result.ImageUploadKey = reader.ReadOpaqueV();
         }
 
         return result;
-    }
-
-    private static void WriteOpaque2(TlsWriter writer, byte[] value)
-    {
-        writer.WriteUint16((ushort)value.Length);
-        if (value.Length > 0)
-            writer.WriteBytes(value);
-    }
-
-    private static byte[] ReadOpaque2(TlsReader reader)
-    {
-        ushort length = reader.ReadUint16();
-        if (length == 0)
-            return Array.Empty<byte>();
-        return reader.ReadBytes(length);
     }
 }
