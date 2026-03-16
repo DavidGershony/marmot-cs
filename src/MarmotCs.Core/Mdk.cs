@@ -351,6 +351,38 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
     // ====== MIP-03 Crypto ======
 
     /// <summary>
+    /// Returns the 32-byte Nostr group ID from the 0xF2EE extension (used in h-tags).
+    /// This is distinct from the MLS group ID — it's a random identifier carried in the
+    /// NostrGroupDataExtension for Nostr event routing.
+    /// </summary>
+    /// <param name="groupId">The MLS group identifier bytes.</param>
+    /// <returns>The 32-byte Nostr group ID, or null if the extension is not present.</returns>
+    /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
+    public byte[]? GetNostrGroupId(byte[] groupId)
+    {
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        foreach (var ext in mlsGroup.GroupContext.Extensions)
+        {
+            if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
+            {
+                // The nostr_group_id is always at offset 2 (after the u16 version),
+                // 32 bytes fixed. Extract directly to avoid codec version mismatches.
+                if (ext.ExtensionData.Length >= 34)
+                {
+                    var nostrGroupId = new byte[32];
+                    Array.Copy(ext.ExtensionData, 2, nostrGroupId, 0, 32);
+                    return nostrGroupId;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Returns the MIP-03 exporter secret for the given group.
     /// This is <c>MLS-Exporter("marmot", "group-event", 32)</c> from the current epoch.
     /// </summary>
@@ -389,7 +421,11 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
             throw new GroupNotFoundException(groupId);
 
         var privateMsg = mlsGroup.EncryptApplicationMessage(plaintext);
-        byte[] msgBytes = TlsCodec.Serialize(writer => privateMsg.WriteTo(writer));
+
+        // Wrap in MLSMessage envelope (version 0x0001 + wire_format 0x0002)
+        // to match Rust OpenMLS tls_serialize_detached() output
+        var mlsMessage = new MlsMessage(WireFormat.MlsPrivateMessage, privateMsg);
+        byte[] msgBytes = TlsCodec.Serialize(writer => mlsMessage.WriteTo(writer));
 
         // Determine sender identity
         var members = mlsGroup.GetMembers();
