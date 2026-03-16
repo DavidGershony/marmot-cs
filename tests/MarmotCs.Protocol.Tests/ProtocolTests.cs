@@ -283,6 +283,7 @@ public class Mip00Tests
         Assert.Contains("encoding", tagNames);
         Assert.Contains("mls_protocol_version", tagNames);
         Assert.Contains("mls_ciphersuite", tagNames);
+        Assert.Contains("mls_extensions", tagNames);
         Assert.Contains("relays", tagNames);
         Assert.Contains("i", tagNames);
     }
@@ -344,6 +345,63 @@ public class Mip00Tests
             new byte[] { 1, 2 }, "identity123", Array.Empty<string>());
         var (_, _, relays) = KeyPackageEventParser.ParseKeyPackageEvent(content, tags);
         Assert.Empty(relays);
+    }
+
+    [Fact]
+    public void Parse_WrongEncoding_Throws()
+    {
+        string content = Convert.ToBase64String(new byte[] { 1, 2, 3 });
+        string[][] tags = new[]
+        {
+            new[] { "encoding", "hex" },
+            new[] { "i", "abcdef01" }
+        };
+
+        var ex = Assert.Throws<FormatException>(() =>
+            KeyPackageEventParser.ParseKeyPackageEvent(content, tags));
+        Assert.Contains("hex", ex.Message);
+    }
+
+    [Fact]
+    public void Build_TagValuesAreCorrect()
+    {
+        var (_, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(
+            new byte[] { 1 }, "abc123", new[] { "wss://relay.test" });
+
+        var protoTag = tags.First(t => t[0] == "mls_protocol_version");
+        Assert.Equal("1.0", protoTag[1]);
+
+        var csTag = tags.First(t => t[0] == "mls_ciphersuite");
+        Assert.Equal("0x0001", csTag[1]);
+    }
+
+    [Fact]
+    public void Build_WithExtensionTypes_ContainsHexValues()
+    {
+        var (_, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(
+            new byte[] { 1 }, "abc123", Array.Empty<string>(),
+            supportedExtensionTypes: new ushort[] { 0xF2EE, 0x000A });
+
+        var extTag = tags.First(t => t[0] == "mls_extensions");
+        Assert.Equal(3, extTag.Length); // "mls_extensions", "0xf2ee", "0x000a"
+        Assert.Equal("0xf2ee", extTag[1]);
+        Assert.Equal("0x000a", extTag[2]);
+    }
+
+    [Fact]
+    public void Build_KeyPackageRefIsLowercaseHex()
+    {
+        var (_, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(
+            new byte[] { 1, 2, 3, 4, 5 }, "abc123", Array.Empty<string>());
+
+        var iTag = tags.First(t => t[0] == "i");
+        string kpRef = iTag[1];
+
+        // Must be lowercase hex
+        Assert.Equal(kpRef, kpRef.ToLowerInvariant());
+        // Must be valid hex (SHA-256 output = 32 bytes = 64 hex chars)
+        Assert.Equal(64, kpRef.Length);
+        Convert.FromHexString(kpRef);
     }
 }
 
