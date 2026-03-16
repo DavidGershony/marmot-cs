@@ -26,8 +26,8 @@ public static class KeyPackageEventParser
 
         // Validate encoding tag
         string? encoding = FindTagValue(tags, "encoding");
-        if (encoding != "mls-base64")
-            throw new FormatException($"Unsupported encoding: '{encoding ?? "(missing)"}'. Expected 'mls-base64'.");
+        if (encoding != "base64")
+            throw new FormatException($"Unsupported encoding: '{encoding ?? "(missing)"}'. Expected 'base64'.");
 
         // Decode the key package from base64
         byte[] keyPackageBytes;

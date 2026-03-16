@@ -647,7 +647,8 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         byte[] identity,
         byte[] signingPrivateKey,
         byte[] signingPublicKey,
-        string[] relays)
+        string[] relays,
+        ushort[]? supportedExtensionTypes = null)
     {
         var keyPackage = MlsGroup.CreateKeyPackage(
             _cipherSuite, identity, signingPrivateKey, signingPublicKey,
@@ -656,7 +657,7 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         byte[] kpBytes = TlsCodec.Serialize(writer => keyPackage.WriteTo(writer));
 
         var (content, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(
-            kpBytes, Convert.ToHexString(identity), relays);
+            kpBytes, Convert.ToHexString(identity), relays, supportedExtensionTypes);
 
         // Note: In production, initPriv and hpkePriv should be persisted securely
         // for later Welcome processing.

@@ -281,20 +281,20 @@ public class Mip00Tests
 
         var tagNames = tags.Select(t => t[0]).ToList();
         Assert.Contains("encoding", tagNames);
-        Assert.Contains("protocol_version", tagNames);
-        Assert.Contains("ciphersuite", tagNames);
+        Assert.Contains("mls_protocol_version", tagNames);
+        Assert.Contains("mls_ciphersuite", tagNames);
         Assert.Contains("relays", tagNames);
         Assert.Contains("i", tagNames);
     }
 
     [Fact]
-    public void Build_EncodingTagIsMlsBase64()
+    public void Build_EncodingTagIsBase64()
     {
         var (_, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(
             new byte[] { 1 }, "abc123", Array.Empty<string>());
 
         var encodingTag = tags.First(t => t[0] == "encoding");
-        Assert.Equal("mls-base64", encodingTag[1]);
+        Assert.Equal("base64", encodingTag[1]);
     }
 
     [Fact]
@@ -316,7 +316,7 @@ public class Mip00Tests
         string content = Convert.ToBase64String(new byte[] { 1 });
         string[][] tags = new[]
         {
-            new[] { "encoding", "mls-base64" }
+            new[] { "encoding", "base64" }
         };
 
         Assert.Throws<FormatException>(() =>
@@ -531,7 +531,7 @@ public class Mip02Tests
         string content = Convert.ToBase64String(new byte[] { 1, 2, 3 });
         string[][] tags = new[]
         {
-            new[] { "encoding", "mls-base64" }
+            new[] { "encoding", "base64" }
         };
 
         Assert.Throws<FormatException>(() =>

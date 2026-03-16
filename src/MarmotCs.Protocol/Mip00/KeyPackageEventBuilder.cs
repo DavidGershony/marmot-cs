@@ -30,7 +30,8 @@ public static class KeyPackageEventBuilder
     public static (string content, string[][] tags) BuildKeyPackageEvent(
         byte[] keyPackageBytes,
         string identityHex,
-        string[] relays)
+        string[] relays,
+        ushort[]? supportedExtensionTypes = null)
     {
         ArgumentNullException.ThrowIfNull(keyPackageBytes);
         ArgumentNullException.ThrowIfNull(identityHex);
@@ -54,12 +55,20 @@ public static class KeyPackageEventBuilder
         relaysTag[0] = "relays";
         Array.Copy(relays, 0, relaysTag, 1, relays.Length);
 
+        // Build the mls_extensions tag: ["mls_extensions", "0xf2ee", "0x000a", ...]
+        var extensionsTag = new List<string> { "mls_extensions" };
+        if (supportedExtensionTypes is { Length: > 0 })
+        {
+            foreach (var extType in supportedExtensionTypes)
+                extensionsTag.Add($"0x{extType:x4}");
+        }
+
         string[][] tags = new[]
         {
-            new[] { "encoding", "mls-base64" },
-            new[] { "protocol_version", "0" },
-            new[] { "ciphersuite", "1" },
-            new[] { "extensions", "" },
+            new[] { "encoding", "base64" },
+            new[] { "mls_protocol_version", "1.0" },
+            new[] { "mls_ciphersuite", "0x0001" },
+            extensionsTag.ToArray(),
             relaysTag,
             new[] { "i", kpRefHex }
         };
