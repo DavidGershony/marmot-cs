@@ -4,6 +4,7 @@ using MarmotCs.Protocol.Mip00;
 using MarmotCs.Protocol.Mip01;
 using MarmotCs.Protocol.Mip02;
 using MarmotCs.Protocol.Mip03;
+using MarmotCs.Protocol.Crypto;
 using MarmotCs.Protocol.Nip44;
 using MarmotCs.Protocol.Nip59;
 using NBitcoin.Secp256k1;
@@ -719,6 +720,175 @@ public class Mip02Tests
 
         Assert.Throws<FormatException>(() =>
             WelcomeEventParser.ParseWelcomeEvent(content, tags));
+    }
+}
+
+// ================================================================
+// MIP-03 GroupEvent Tests (Encryption/Decryption)
+// ================================================================
+
+public class GroupEventTests
+{
+    private static byte[] RandomKey()
+    {
+        var key = new byte[32];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(key);
+        return key;
+    }
+
+    [Fact]
+    public void BuildAndParseGroupEvent_RoundTrips()
+    {
+        byte[] key = RandomKey();
+        byte[] mlsMessage = new byte[] { 10, 20, 30, 40, 50 };
+        byte[] groupId = new byte[32];
+        groupId[0] = 0xAB;
+
+        var (content, tags) = GroupEventBuilder.BuildGroupEvent(mlsMessage, groupId, key);
+        var (parsedMessage, parsedGroupId) = GroupEventParser.ParseGroupEvent(content, tags, key);
+
+        Assert.Equal(mlsMessage, parsedMessage);
+        Assert.Equal(groupId, parsedGroupId);
+    }
+
+    [Fact]
+    public void Build_ContainsHTag()
+    {
+        byte[] key = RandomKey();
+        byte[] groupId = new byte[] { 0xAB, 0xCD, 0xEF };
+
+        var (_, tags) = GroupEventBuilder.BuildGroupEvent(new byte[] { 1 }, groupId, key);
+
+        var hTag = tags.First(t => t[0] == "h");
+        Assert.Equal("abcdef", hTag[1]); // lowercase hex
+    }
+
+    [Fact]
+    public void Build_ContainsEncodingTag()
+    {
+        byte[] key = RandomKey();
+        var (_, tags) = GroupEventBuilder.BuildGroupEvent(new byte[] { 1 }, new byte[4], key);
+
+        var encoding = tags.First(t => t[0] == "encoding");
+        Assert.Equal("base64", encoding[1]);
+    }
+
+    [Fact]
+    public void Build_ContentIsBase64()
+    {
+        byte[] key = RandomKey();
+        var (content, _) = GroupEventBuilder.BuildGroupEvent(new byte[] { 1 }, new byte[4], key);
+
+        // Should not throw — content must be valid base64
+        byte[] decoded = Convert.FromBase64String(content);
+
+        // base64(nonce[12] + ciphertext[1+] + tag[16]) ≥ 29 bytes
+        Assert.True(decoded.Length >= 29);
+    }
+
+    [Fact]
+    public void Build_EmptyMlsMessage_Throws()
+    {
+        byte[] key = RandomKey();
+        Assert.Throws<ArgumentException>(() =>
+            GroupEventBuilder.BuildGroupEvent(Array.Empty<byte>(), new byte[4], key));
+    }
+
+    [Fact]
+    public void Build_WrongKeyLength_Throws()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            GroupEventBuilder.BuildGroupEvent(new byte[] { 1 }, new byte[4], new byte[16]));
+    }
+
+    [Fact]
+    public void Parse_WrongKey_Throws()
+    {
+        byte[] key1 = RandomKey();
+        byte[] key2 = RandomKey();
+
+        var (content, tags) = GroupEventBuilder.BuildGroupEvent(new byte[] { 1, 2, 3 }, new byte[4], key1);
+
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() =>
+            GroupEventParser.ParseGroupEvent(content, tags, key2));
+    }
+
+    [Fact]
+    public void Parse_MissingHTag_Throws()
+    {
+        byte[] key = RandomKey();
+        var (content, _) = GroupEventBuilder.BuildGroupEvent(new byte[] { 1 }, new byte[4], key);
+
+        string[][] tagsWithoutH = new[] { new[] { "encoding", "base64" } };
+
+        Assert.Throws<FormatException>(() =>
+            GroupEventParser.ParseGroupEvent(content, tagsWithoutH, key));
+    }
+
+    [Fact]
+    public void Encrypt_ProducesDifferentOutputEachTime()
+    {
+        byte[] key = RandomKey();
+        byte[] plaintext = new byte[] { 1, 2, 3 };
+
+        string enc1 = GroupEventEncryption.Encrypt(plaintext, key);
+        string enc2 = GroupEventEncryption.Encrypt(plaintext, key);
+
+        // Random nonce means different output each time
+        Assert.NotEqual(enc1, enc2);
+    }
+
+    [Fact]
+    public void Encrypt_WireFormat_NonceFirst_TagLast()
+    {
+        byte[] key = RandomKey();
+        byte[] plaintext = new byte[] { 0xDE, 0xAD };
+
+        string content = GroupEventEncryption.Encrypt(plaintext, key);
+        byte[] decoded = Convert.FromBase64String(content);
+
+        // nonce[12] + ciphertext[2] + tag[16] = 30 bytes
+        Assert.Equal(30, decoded.Length);
+
+        // First 12 bytes = nonce (verify by decrypting)
+        byte[] decrypted = GroupEventEncryption.Decrypt(content, key);
+        Assert.Equal(plaintext, decrypted);
+    }
+
+    [Fact]
+    public void Decrypt_TooShort_Throws()
+    {
+        byte[] key = RandomKey();
+        // 28 bytes = exactly nonce+tag, no ciphertext — too short
+        string tooShort = Convert.ToBase64String(new byte[28]);
+
+        Assert.Throws<System.Security.Cryptography.CryptographicException>(() =>
+            GroupEventEncryption.Decrypt(tooShort, key));
+    }
+
+    [Fact]
+    public void Decrypt_InvalidBase64_Throws()
+    {
+        byte[] key = RandomKey();
+
+        Assert.Throws<System.Security.Cryptography.CryptographicException>(() =>
+            GroupEventEncryption.Decrypt("not-valid-base64!!!", key));
+    }
+
+    [Fact]
+    public void BuildAndParse_LargeMessage_RoundTrips()
+    {
+        byte[] key = RandomKey();
+        byte[] mlsMessage = new byte[4096];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(mlsMessage);
+        byte[] groupId = new byte[32];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(groupId);
+
+        var (content, tags) = GroupEventBuilder.BuildGroupEvent(mlsMessage, groupId, key);
+        var (parsedMessage, parsedGroupId) = GroupEventParser.ParseGroupEvent(content, tags, key);
+
+        Assert.Equal(mlsMessage, parsedMessage);
+        Assert.Equal(groupId, parsedGroupId);
     }
 }
 
