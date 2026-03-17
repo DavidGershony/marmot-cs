@@ -5,6 +5,8 @@ using MarmotCs.Protocol.Mip01;
 using MarmotCs.Protocol.Mip02;
 using MarmotCs.Protocol.Mip03;
 using MarmotCs.Protocol.Nip44;
+using MarmotCs.Protocol.Nip59;
+using NBitcoin.Secp256k1;
 using Xunit;
 
 namespace MarmotCs.Protocol.Tests;
@@ -717,6 +719,136 @@ public class Mip02Tests
 
         Assert.Throws<FormatException>(() =>
             WelcomeEventParser.ParseWelcomeEvent(content, tags));
+    }
+}
+
+// ================================================================
+// NIP-59 GiftWrap Tests
+// ================================================================
+
+public class GiftWrapTests
+{
+    private static (byte[] privKey, byte[] pubKey) GenerateKeyPair()
+    {
+        var ctx = Context.Instance;
+        var privBytes = new byte[32];
+        using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+        ECPrivKey? ecPriv;
+        do
+        {
+            rng.GetBytes(privBytes);
+        } while (!ECPrivKey.TryCreate(privBytes, ctx, out ecPriv));
+
+        var ecPub = ecPriv!.CreateXOnlyPubKey();
+        var pubBytes = new byte[32];
+        ecPub.WriteToSpan(pubBytes);
+        return (privBytes, pubBytes);
+    }
+
+    [Fact]
+    public void SealUnseal_RoundTrips()
+    {
+        var (senderPriv, senderPub) = GenerateKeyPair();
+        var (recipientPriv, recipientPub) = GenerateKeyPair();
+
+        byte[] original = System.Text.Encoding.UTF8.GetBytes("Hello MIP-02 Gift Wrap!");
+        byte[] sealed_ = GiftWrap.SealContent(original, senderPriv, recipientPub);
+        byte[] unsealed = GiftWrap.UnsealContent(sealed_, recipientPriv, senderPub);
+
+        Assert.Equal(original, unsealed);
+    }
+
+    [Fact]
+    public void SealUnseal_BinaryContent_RoundTrips()
+    {
+        var (senderPriv, senderPub) = GenerateKeyPair();
+        var (recipientPriv, recipientPub) = GenerateKeyPair();
+
+        // Binary content (e.g. MLS Welcome bytes)
+        byte[] original = new byte[256];
+        using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+        rng.GetBytes(original);
+
+        byte[] sealed_ = GiftWrap.SealContent(original, senderPriv, recipientPub);
+        byte[] unsealed = GiftWrap.UnsealContent(sealed_, recipientPriv, senderPub);
+
+        Assert.Equal(original, unsealed);
+    }
+
+    [Fact]
+    public void Seal_ProducesDifferentOutputEachTime()
+    {
+        var (senderPriv, _) = GenerateKeyPair();
+        var (_, recipientPub) = GenerateKeyPair();
+
+        byte[] content = new byte[] { 1, 2, 3 };
+        byte[] sealed1 = GiftWrap.SealContent(content, senderPriv, recipientPub);
+        byte[] sealed2 = GiftWrap.SealContent(content, senderPriv, recipientPub);
+
+        // NIP-44 uses random nonce, so outputs differ
+        Assert.NotEqual(sealed1, sealed2);
+    }
+
+    [Fact]
+    public void Unseal_WrongKey_Throws()
+    {
+        var (senderPriv, senderPub) = GenerateKeyPair();
+        var (_, recipientPub) = GenerateKeyPair();
+        var (wrongPriv, _) = GenerateKeyPair();
+
+        byte[] content = new byte[] { 1, 2, 3 };
+        byte[] sealed_ = GiftWrap.SealContent(content, senderPriv, recipientPub);
+
+        // Wrong recipient private key should fail MAC verification
+        Assert.ThrowsAny<Exception>(() =>
+            GiftWrap.UnsealContent(sealed_, wrongPriv, senderPub));
+    }
+
+    [Fact]
+    public void Seal_EmptyContent_Throws()
+    {
+        var (senderPriv, _) = GenerateKeyPair();
+        var (_, recipientPub) = GenerateKeyPair();
+
+        Assert.Throws<ArgumentException>(() =>
+            GiftWrap.SealContent(Array.Empty<byte>(), senderPriv, recipientPub));
+    }
+
+    [Fact]
+    public void Seal_NullContent_Throws()
+    {
+        var (senderPriv, _) = GenerateKeyPair();
+        var (_, recipientPub) = GenerateKeyPair();
+
+        Assert.Throws<ArgumentNullException>(() =>
+            GiftWrap.SealContent(null!, senderPriv, recipientPub));
+    }
+
+    [Fact]
+    public void Unseal_NullSealedContent_Throws()
+    {
+        var (recipientPriv, _) = GenerateKeyPair();
+        var (_, senderPub) = GenerateKeyPair();
+
+        Assert.Throws<ArgumentNullException>(() =>
+            GiftWrap.UnsealContent(null!, recipientPriv, senderPub));
+    }
+
+    [Fact]
+    public void SealUnseal_LargeContent_RoundTrips()
+    {
+        var (senderPriv, senderPub) = GenerateKeyPair();
+        var (recipientPriv, recipientPub) = GenerateKeyPair();
+
+        // Large content (~4KB, typical MLS Welcome size)
+        byte[] original = new byte[4096];
+        using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+        rng.GetBytes(original);
+
+        byte[] sealed_ = GiftWrap.SealContent(original, senderPriv, recipientPub);
+        byte[] unsealed = GiftWrap.UnsealContent(sealed_, recipientPriv, senderPub);
+
+        Assert.Equal(original, unsealed);
     }
 }
 
