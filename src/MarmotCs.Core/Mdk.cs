@@ -46,9 +46,12 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         _config = config;
         _callback = callback;
         _logger = logger ?? NullLogger.Instance;
-        _cipherSuite = config.CipherSuite == 0x0001
-            ? new CipherSuite0x0001()
-            : throw new ArgumentException($"Unsupported cipher suite: 0x{config.CipherSuite:X4}");
+        _cipherSuite = config.CipherSuite switch
+        {
+            0x0001 => new CipherSuite0x0001(),
+            0x0003 => new CipherSuite0x0003(),
+            _ => throw new ArgumentException($"Unsupported cipher suite: 0x{config.CipherSuite:X4}")
+        };
         _snapshots = new EpochSnapshotManager(storage, config.MaxSnapshotsPerGroup);
     }
 
