@@ -15,7 +15,7 @@ public sealed record GroupResult(
 /// Result from a group update operation (add members, remove members, self-update).
 /// </summary>
 /// <param name="Group">The updated group record.</param>
-/// <param name="CommitMessageBytes">Serialized PublicMessage to publish as a kind 445 Nostr event.</param>
+/// <param name="CommitMessageBytes">Serialized PrivateMessage commit to publish as a kind 445 Nostr event.</param>
 /// <param name="WelcomeBytes">Serialized Welcome for new members (kind 444), or null if no new members.</param>
 /// <param name="AddedIdentities">Hex-encoded identities of added members.</param>
 /// <param name="RemovedIdentities">Hex-encoded identities of removed members.</param>

@@ -555,36 +555,38 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
             // Process based on parsed type
             if (privateMsg != null)
             {
-                var (plaintext, senderLeaf) = mlsGroup.DecryptApplicationMessage(privateMsg);
+                // PrivateMessage can be an application message or a commit/proposal.
+                // ContentType is in the unencrypted header (RFC 9420 §6.3).
+                if (privateMsg.ContentType == ContentType.Application)
+                {
+                    var (plaintext, senderLeaf) = mlsGroup.DecryptApplicationMessage(privateMsg);
 
-                var members = mlsGroup.GetMembers();
-                var senderMember = members.FirstOrDefault(m => m.leafIndex == senderLeaf);
-                byte[] senderIdentity = senderMember.identity ?? Array.Empty<byte>();
+                    var members = mlsGroup.GetMembers();
+                    var senderMember = members.FirstOrDefault(m => m.leafIndex == senderLeaf);
+                    byte[] senderIdentity = senderMember.identity ?? Array.Empty<byte>();
 
-                var message = new Message(
-                    Id: Guid.NewGuid().ToString(),
-                    GroupId: gid,
-                    SenderIdentity: senderIdentity,
-                    Content: plaintext,
-                    Epoch: mlsGroup.Epoch,
-                    State: MessageState.Delivered,
-                    CreatedAt: DateTimeOffset.UtcNow);
+                    var message = new Message(
+                        Id: Guid.NewGuid().ToString(),
+                        GroupId: gid,
+                        SenderIdentity: senderIdentity,
+                        Content: plaintext,
+                        Epoch: mlsGroup.Epoch,
+                        State: MessageState.Delivered,
+                        CreatedAt: DateTimeOffset.UtcNow);
 
-                await _storage.Messages.SaveMessageAsync(message, ct);
-                await _storage.Messages.SaveProcessedMessageAsync(
-                    new ProcessedMessage(eventId, gid, ProcessedMessageState.Completed, DateTimeOffset.UtcNow), ct);
+                    await _storage.Messages.SaveMessageAsync(message, ct);
+                    await _storage.Messages.SaveProcessedMessageAsync(
+                        new ProcessedMessage(eventId, gid, ProcessedMessageState.Completed, DateTimeOffset.UtcNow), ct);
 
-                return new ApplicationMessageResult(message);
-            }
+                    return new ApplicationMessageResult(message);
+                }
 
-            if (publicMsg != null)
-            {
-                if (publicMsg.Content.ContentType == ContentType.Commit)
+                if (privateMsg.ContentType == ContentType.Commit)
                 {
                     var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
                     try
                     {
-                        mlsGroup.ProcessCommit(publicMsg);
+                        mlsGroup.ProcessCommit(privateMsg);
 
                         var existingGroup = await _storage.Groups.GetGroupAsync(gid, ct);
                         if (existingGroup != null)
@@ -617,7 +619,14 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
                 }
 
                 return new UnprocessableResult(
-                    $"PublicMessage with unsupported ContentType: {publicMsg.Content.ContentType}");
+                    $"PrivateMessage with unsupported ContentType: {privateMsg.ContentType}");
+            }
+
+            if (publicMsg != null)
+            {
+                // PublicMessage is only expected for SelfRemove proposals (MIP-03)
+                return new UnprocessableResult(
+                    $"PublicMessage not supported (ContentType: {publicMsg.Content.ContentType})");
             }
 
             return new UnprocessableResult("Could not parse message as PrivateMessage or PublicMessage");
