@@ -409,6 +409,33 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
     }
 
     /// <summary>
+    /// Returns the full decoded NostrGroupData from the 0xF2EE extension, or null if not found.
+    /// </summary>
+    public NostrGroupData? GetNostrGroupData(byte[] groupId)
+    {
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        foreach (var ext in mlsGroup.GroupContext.Extensions)
+        {
+            if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
+            {
+                try
+                {
+                    return NostrGroupDataExtension.FromExtension(ext);
+                }
+                catch (Exception)
+                {
+                    return null;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Returns the MIP-03 exporter secret for the given group.
     /// This is <c>MLS-Exporter("marmot", "group-event", 32)</c> from the current epoch.
     /// </summary>
