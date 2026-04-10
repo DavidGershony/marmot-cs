@@ -1,7 +1,9 @@
+using System.Security.Cryptography;
 using DotnetMls.Codec;
 using DotnetMls.Crypto;
 using DotnetMls.Group;
 using DotnetMls.Types;
+using MarmotCs.Protocol.Crypto;
 using MarmotCs.Protocol.Mip00;
 using MarmotCs.Protocol.Mip01;
 using MarmotCs.Storage.Abstractions;
@@ -24,9 +26,10 @@ namespace MarmotCs.Core;
 /// if accessed from multiple threads.
 /// </summary>
 /// <typeparam name="TStorage">The storage provider implementation type.</typeparam>
-public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
+public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProvider
 {
     private readonly TStorage _storage;
+    private bool _disposed;
     private readonly MdkConfig _config;
     private readonly IMdkCallback? _callback;
     private readonly ILogger _logger;
@@ -35,6 +38,9 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
 
     // In-memory MLS group state cache (groupId hex -> MlsGroup)
     private readonly Dictionary<string, MlsGroup> _groups = new();
+
+    // Per-group lock to prevent concurrent mutations of the same group's MLS state
+    private readonly Dictionary<string, SemaphoreSlim> _groupLocks = new();
 
     // Signing key storage (in production, these would be in secure storage)
     private readonly Dictionary<string, byte[]> _signingPrivateKeys = new();
@@ -76,6 +82,7 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         string[] relays,
         CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         var mlsGroupConfig = new MlsGroupConfig
         {
             OutOfOrderTolerance = _config.OutOfOrderTolerance,
@@ -97,7 +104,12 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         else if (identity.Length == 64)
         {
             try { adminPubkeys = Convert.FromHexString(System.Text.Encoding.UTF8.GetString(identity)); }
-            catch { adminPubkeys = Array.Empty<byte>(); }
+            catch (FormatException ex)
+            {
+                throw new ArgumentException(
+                    "Identity is 64 bytes but is not valid hex-encoded. " +
+                    "Expected a 32-byte raw pubkey or a 64-byte hex-encoded pubkey.", nameof(identity), ex);
+            }
         }
         else
         {
@@ -215,9 +227,15 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         byte[][] keyPackageBytesList,
         CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         string hex = Convert.ToHexString(groupId);
         if (!_groups.TryGetValue(hex, out var mlsGroup))
             throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
 
         var gid = new MlsGroupId(groupId);
         var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
@@ -290,6 +308,9 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
             await _snapshots.RollbackAsync(snapshotId, ct);
             throw new CommitException("Failed to add members", ex);
         }
+
+        }
+        finally { groupLock.Release(); }
     }
 
     /// <summary>
@@ -309,6 +330,11 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         string hex = Convert.ToHexString(groupId);
         if (!_groups.TryGetValue(hex, out var mlsGroup))
             throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
 
         var gid = new MlsGroupId(groupId);
         var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
@@ -372,6 +398,9 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
             await _snapshots.RollbackAsync(snapshotId, ct);
             throw new CommitException("Failed to remove members", ex);
         }
+
+        }
+        finally { groupLock.Release(); }
     }
 
     // ====== MIP-03 Crypto ======
@@ -425,8 +454,14 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
                 {
                     return NostrGroupDataExtension.FromExtension(ext);
                 }
-                catch (Exception)
+                catch (FormatException ex)
                 {
+                    _logger.LogWarning(ex, "Failed to decode NostrGroupData from 0xF2EE extension ({Len} bytes)", ext.ExtensionData.Length);
+                    return null;
+                }
+                catch (ArgumentException ex)
+                {
+                    _logger.LogWarning(ex, "Invalid NostrGroupData extension data ({Len} bytes)", ext.ExtensionData.Length);
                     return null;
                 }
             }
@@ -444,14 +479,15 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
     /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
     public byte[] GetExporterSecret(byte[] groupId)
     {
+        ThrowIfDisposed();
         string hex = Convert.ToHexString(groupId);
         if (!_groups.TryGetValue(hex, out var mlsGroup))
             throw new GroupNotFoundException(groupId);
 
         return mlsGroup.ExportSecret(
-            Mip03Crypto.ExporterLabel,
-            Mip03Crypto.ExporterContext,
-            Mip03Crypto.ExporterLength);
+            GroupEventEncryption.ExporterLabel,
+            GroupEventEncryption.ExporterContext,
+            GroupEventEncryption.ExporterLength);
     }
 
     // ====== Messages ======
@@ -469,9 +505,15 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         byte[] plaintext,
         CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         string hex = Convert.ToHexString(groupId);
         if (!_groups.TryGetValue(hex, out var mlsGroup))
             throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
 
         var privateMsg = mlsGroup.EncryptApplicationMessage(plaintext);
 
@@ -499,6 +541,9 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         await _storage.Messages.SaveMessageAsync(message, ct);
 
         return msgBytes;
+
+        }
+        finally { groupLock.Release(); }
     }
 
     /// <summary>
@@ -518,9 +563,15 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         string eventId,
         CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         string hex = Convert.ToHexString(groupId);
         if (!_groups.TryGetValue(hex, out var mlsGroup))
             throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
 
         var gid = new MlsGroupId(groupId);
 
@@ -671,6 +722,9 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
 
             return new UnprocessableResult(ex.Message);
         }
+
+        }
+        finally { groupLock.Release(); }
     }
 
     /// <summary>
@@ -843,6 +897,7 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
         byte[] mySigningPrivateKey,
         CancellationToken ct = default)
     {
+        ThrowIfDisposed();
         var welcomeRecord = await _storage.Welcomes.GetWelcomeAsync(welcomeId, ct)
             ?? throw new WelcomeProcessingException($"Welcome {welcomeId} not found");
 
@@ -1101,5 +1156,43 @@ public sealed class Mdk<TStorage> where TStorage : IMdkStorageProvider
             throw new GroupNotFoundException(groupId);
 
         mlsGroup.ClearPendingCommit();
+    }
+
+    /// <summary>
+    /// Zeroes out all stored private key material and marks this instance as disposed.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        foreach (var key in _signingPrivateKeys.Values)
+            CryptographicOperations.ZeroMemory(key);
+        _signingPrivateKeys.Clear();
+
+        foreach (var key in _hpkePrivateKeys.Values)
+            CryptographicOperations.ZeroMemory(key);
+        _hpkePrivateKeys.Clear();
+
+        foreach (var sem in _groupLocks.Values)
+            sem.Dispose();
+        _groupLocks.Clear();
+
+        _groups.Clear();
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+    }
+
+    private SemaphoreSlim GetGroupLock(string groupHex)
+    {
+        if (!_groupLocks.TryGetValue(groupHex, out var sem))
+        {
+            sem = new SemaphoreSlim(1, 1);
+            _groupLocks[groupHex] = sem;
+        }
+        return sem;
     }
 }

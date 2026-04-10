@@ -10,6 +10,15 @@ namespace MarmotCs.Protocol.Crypto;
 /// </summary>
 public static class GroupEventEncryption
 {
+    /// <summary>MLS exporter label used by the Marmot protocol.</summary>
+    public const string ExporterLabel = "marmot";
+
+    /// <summary>MLS exporter context used for group message encryption.</summary>
+    public static readonly byte[] ExporterContext = "group-event"u8.ToArray();
+
+    /// <summary>Length of the exporter secret (and ChaCha20-Poly1305 key) in bytes.</summary>
+    public const int ExporterLength = 32;
+
     private const int NonceSize = 12;
     private const int TagSizeBits = 128;
 

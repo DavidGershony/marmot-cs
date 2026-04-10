@@ -944,3 +944,106 @@ public class FullLifecycleTests
         Assert.Equal(msg, ((ApplicationMessageResult)msgResult).Message.Content);
     }
 }
+
+// ================================================================
+// Security: Input Validation Tests
+// ================================================================
+
+public class InputValidationTests
+{
+    [Fact]
+    public async Task CreateGroupAsync_InvalidHexIdentity_ThrowsArgumentException()
+    {
+        // A 64-byte identity that is NOT valid hex should throw, not silently degrade
+        var mdk = MdkFactory.Create();
+        var cs = new CipherSuite0x0001();
+        var (sigPriv, sigPub) = cs.GenerateSignatureKeyPair();
+
+        // 64 bytes of 'ZZ' repeated — not valid hex characters
+        byte[] badHexIdentity = System.Text.Encoding.UTF8.GetBytes(
+            "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ");
+        Assert.Equal(64, badHexIdentity.Length);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            mdk.CreateGroupAsync(badHexIdentity, sigPriv, sigPub,
+                "Bad Group", new[] { "wss://relay.example.com" }));
+    }
+
+    [Fact]
+    public async Task GetNostrGroupData_ReturnsDataForValidGroup()
+    {
+        var mdk = MdkFactory.Create();
+        var alice = new TestUser("alice");
+
+        var result = await mdk.CreateGroupAsync(
+            alice.Identity, alice.SigningPrivateKey, alice.SigningPublicKey,
+            "Secure Group", new[] { "wss://relay.example.com" });
+
+        var data = mdk.GetNostrGroupData(result.Group.Id.Value);
+        Assert.NotNull(data);
+        Assert.Equal("Secure Group", data!.Name);
+    }
+
+    [Fact]
+    public async Task GetNostrGroupData_ThrowsForUnknownGroup()
+    {
+        var mdk = MdkFactory.Create();
+        var alice = new TestUser("alice");
+
+        // Create a group so we know the MDK is set up
+        await mdk.CreateGroupAsync(
+            alice.Identity, alice.SigningPrivateKey, alice.SigningPublicKey,
+            "Some Group", new[] { "wss://relay.example.com" });
+
+        // Unknown group ID
+        Assert.Throws<GroupNotFoundException>(() =>
+            mdk.GetNostrGroupData(new byte[16]));
+    }
+
+    [Fact]
+    public void Mdk_ImplementsIDisposable()
+    {
+        var mdk = MdkFactory.Create();
+        Assert.IsAssignableFrom<IDisposable>(mdk);
+    }
+
+    [Fact]
+    public async Task Mdk_Dispose_PreventsKeyAccess()
+    {
+        var mdk = MdkFactory.Create();
+        var alice = new TestUser("alice");
+
+        var result = await mdk.CreateGroupAsync(
+            alice.Identity, alice.SigningPrivateKey, alice.SigningPublicKey,
+            "Test Group", new[] { "wss://relay.example.com" });
+
+        mdk.Dispose();
+
+        // After disposal, operations requiring stored keys should throw
+        Assert.Throws<ObjectDisposedException>(() =>
+            mdk.GetExporterSecret(result.Group.Id.Value));
+    }
+
+    [Fact]
+    public async Task Mdk_ConcurrentMessages_DoNotCorruptState()
+    {
+        var mdk = MdkFactory.Create();
+        var alice = new TestUser("alice");
+
+        var result = await mdk.CreateGroupAsync(
+            alice.Identity, alice.SigningPrivateKey, alice.SigningPublicKey,
+            "Concurrent Group", new[] { "wss://relay.example.com" });
+
+        var groupId = result.Group.Id.Value;
+
+        // Send multiple messages concurrently — should not throw or corrupt state
+        var tasks = Enumerable.Range(0, 10).Select(i =>
+            mdk.CreateMessageAsync(groupId, System.Text.Encoding.UTF8.GetBytes($"Message {i}")));
+
+        var results = await Task.WhenAll(tasks);
+
+        // All should succeed with unique serialized messages
+        Assert.Equal(10, results.Length);
+        Assert.Equal(10, results.Select(r => Convert.ToBase64String(r)).Distinct().Count());
+    }
+}
