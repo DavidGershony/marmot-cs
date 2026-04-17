@@ -39,7 +39,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     {
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
-            INSERT INTO groups (group_id, state, name, image, group_data, epoch,
+            INSERT OR REPLACE INTO groups (group_id, state, name, image, group_data, epoch,
                                 self_update_state, self_update_completed_at,
                                 created_at, updated_at, mls_state)
             VALUES (@group_id, @state, @name, @image, @group_data, @epoch,
@@ -210,7 +210,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     {
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
-            INSERT INTO messages (id, group_id, sender_identity, content, epoch, state, created_at)
+            INSERT OR REPLACE INTO messages (id, group_id, sender_identity, content, epoch, state, created_at)
             VALUES (@id, @group_id, @sender_identity, @content, @epoch, @state, @created_at);";
         BindMessageParams(cmd, message);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -314,7 +314,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     {
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
-            INSERT INTO welcomes (id, group_id, welcome_data, state, group_data,
+            INSERT OR REPLACE INTO welcomes (id, group_id, welcome_data, state, group_data,
                                   sender_nostr_pubkey, created_at)
             VALUES (@id, @group_id, @welcome_data, @state, @group_data,
                     @sender_nostr_pubkey, @created_at);";
@@ -578,7 +578,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
                 var msg = DtoToMessage(dto);
                 await using var cmd = _connection.CreateCommand();
                 cmd.CommandText = @"
-                    INSERT INTO messages (id, group_id, sender_identity, content, epoch, state, created_at)
+                    INSERT OR REPLACE INTO messages (id, group_id, sender_identity, content, epoch, state, created_at)
                     VALUES (@id, @group_id, @sender_identity, @content, @epoch, @state, @created_at);";
                 BindMessageParams(cmd, msg);
                 await cmd.ExecuteNonQueryAsync(ct);
@@ -604,7 +604,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
                 var w = DtoToWelcome(dto);
                 await using var cmd = _connection.CreateCommand();
                 cmd.CommandText = @"
-                    INSERT INTO welcomes (id, group_id, welcome_data, state, group_data,
+                    INSERT OR REPLACE INTO welcomes (id, group_id, welcome_data, state, group_data,
                                           sender_nostr_pubkey, created_at)
                     VALUES (@id, @group_id, @welcome_data, @state, @group_data,
                             @sender_nostr_pubkey, @created_at);";
