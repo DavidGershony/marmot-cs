@@ -14,6 +14,7 @@ public sealed class MemoryStorageProvider : IMdkStorageProvider, IGroupStorage, 
     private readonly ConcurrentDictionary<string, Group> _groups = new();
     private readonly ConcurrentDictionary<string, List<GroupRelay>> _groupRelays = new();
     private readonly ConcurrentDictionary<string, Dictionary<ulong, GroupExporterSecret>> _exporterSecrets = new();
+    private readonly ConcurrentDictionary<string, Dictionary<ulong, (string EventId, DateTimeOffset CreatedAt)>> _appliedCommits = new();
 
     // ── Message storage ────────────────────────────────────────────────
     private readonly ConcurrentDictionary<string, Message> _messages = new();
@@ -118,6 +119,22 @@ public sealed class MemoryStorageProvider : IMdkStorageProvider, IGroupStorage, 
         if (_exporterSecrets.TryGetValue(GroupKey(groupId), out var dict))
             dict.TryGetValue(epoch, out result);
         return Task.FromResult(result);
+    }
+
+    Task IGroupStorage.SaveAppliedCommitAsync(MlsGroupId groupId, ulong epoch, string eventId, DateTimeOffset createdAt, CancellationToken ct)
+    {
+        var gKey = GroupKey(groupId);
+        var dict = _appliedCommits.GetOrAdd(gKey, _ => new Dictionary<ulong, (string, DateTimeOffset)>());
+        lock (_lock) { dict[epoch] = (eventId, createdAt); }
+        return Task.CompletedTask;
+    }
+
+    Task<(string EventId, DateTimeOffset CreatedAt)?> IGroupStorage.GetAppliedCommitAsync(MlsGroupId groupId, ulong epoch, CancellationToken ct)
+    {
+        if (_appliedCommits.TryGetValue(GroupKey(groupId), out var dict) &&
+            dict.TryGetValue(epoch, out var commit))
+            return Task.FromResult<(string, DateTimeOffset)?>(commit);
+        return Task.FromResult<(string EventId, DateTimeOffset CreatedAt)?>(null);
     }
 
     // ================================================================
@@ -287,6 +304,10 @@ public sealed class MemoryStorageProvider : IMdkStorageProvider, IGroupStorage, 
             if (_exporterSecrets.TryGetValue(gKey, out var secrets))
                 snap.ExporterSecrets = new Dictionary<ulong, GroupExporterSecret>(secrets);
 
+            // Snapshot applied commits
+            if (_appliedCommits.TryGetValue(gKey, out var commits))
+                snap.AppliedCommits = new Dictionary<ulong, (string, DateTimeOffset)>(commits);
+
             // Snapshot messages for this group
             if (_messagesByGroup.TryGetValue(gKey, out var msgs))
             {
@@ -346,6 +367,12 @@ public sealed class MemoryStorageProvider : IMdkStorageProvider, IGroupStorage, 
                 _exporterSecrets[gKey] = new Dictionary<ulong, GroupExporterSecret>(snap.ExporterSecrets);
             else
                 _exporterSecrets.TryRemove(gKey, out _);
+
+            // Restore applied commits
+            if (snap.AppliedCommits is not null)
+                _appliedCommits[gKey] = new Dictionary<ulong, (string, DateTimeOffset)>(snap.AppliedCommits);
+            else
+                _appliedCommits.TryRemove(gKey, out _);
 
             // Remove current messages for this group from the flat index
             if (_messagesByGroup.TryGetValue(gKey, out var currentMsgs))
@@ -453,5 +480,6 @@ public sealed class MemoryStorageProvider : IMdkStorageProvider, IGroupStorage, 
         public List<ProcessedMessage>? ProcessedMessages { get; set; }
         public List<Welcome>? Welcomes { get; set; }
         public List<ProcessedWelcome>? ProcessedWelcomes { get; set; }
+        public Dictionary<ulong, (string EventId, DateTimeOffset CreatedAt)>? AppliedCommits { get; set; }
     }
 }

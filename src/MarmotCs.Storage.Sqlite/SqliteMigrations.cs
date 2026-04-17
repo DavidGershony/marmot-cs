@@ -15,6 +15,8 @@ internal static class SqliteMigrations
         (2, "Snapshots table", V002),
         (3, "Add indexes", V003),
         (4, "Message sort index", V004),
+        (5, "MLS binary state column", V005),
+        (6, "Applied commits tracking", V006),
     };
 
     /// <summary>
@@ -189,6 +191,35 @@ internal static class SqliteMigrations
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
             CREATE INDEX idx_messages_epoch ON messages(group_id, epoch);";
+        cmd.ExecuteNonQuery();
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // V005 – MLS binary state on groups table
+    // ────────────────────────────────────────────────────────────────
+
+    private static void V005(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"ALTER TABLE groups ADD COLUMN mls_state BLOB;";
+        cmd.ExecuteNonQuery();
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // V006 – Applied commits tracking for MIP-03 race resolution
+    // ────────────────────────────────────────────────────────────────
+
+    private static void V006(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            CREATE TABLE applied_commits (
+                group_id    BLOB    NOT NULL,
+                epoch       INTEGER NOT NULL,
+                event_id    TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL,
+                PRIMARY KEY (group_id, epoch)
+            );";
         cmd.ExecuteNonQuery();
     }
 }

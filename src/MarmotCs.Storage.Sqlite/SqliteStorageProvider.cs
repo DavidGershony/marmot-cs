@@ -41,10 +41,10 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         cmd.CommandText = @"
             INSERT INTO groups (group_id, state, name, image, group_data, epoch,
                                 self_update_state, self_update_completed_at,
-                                created_at, updated_at)
+                                created_at, updated_at, mls_state)
             VALUES (@group_id, @state, @name, @image, @group_data, @epoch,
                     @self_update_state, @self_update_completed_at,
-                    @created_at, @updated_at);";
+                    @created_at, @updated_at, @mls_state);";
         BindGroupParams(cmd, group);
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -91,7 +91,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
                 self_update_state = @self_update_state,
                 self_update_completed_at = @self_update_completed_at,
                 created_at = @created_at,
-                updated_at = @updated_at
+                updated_at = @updated_at,
+                mls_state = @mls_state
             WHERE group_id = @group_id;";
         BindGroupParams(cmd, group);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -170,6 +171,35 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             new MlsGroupId((byte[])reader["group_id"]),
             (ulong)(long)reader["epoch"],
             (byte[])reader["secret"]);
+    }
+
+    async Task IGroupStorage.SaveAppliedCommitAsync(MlsGroupId groupId, ulong epoch, string eventId, DateTimeOffset createdAt, CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT OR REPLACE INTO applied_commits (group_id, epoch, event_id, created_at)
+            VALUES (@group_id, @epoch, @event_id, @created_at);";
+        cmd.Parameters.AddWithValue("@group_id", groupId.Value);
+        cmd.Parameters.AddWithValue("@epoch", (long)epoch);
+        cmd.Parameters.AddWithValue("@event_id", eventId);
+        cmd.Parameters.AddWithValue("@created_at", createdAt.ToString("o"));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    async Task<(string EventId, DateTimeOffset CreatedAt)?> IGroupStorage.GetAppliedCommitAsync(MlsGroupId groupId, ulong epoch, CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT event_id, created_at FROM applied_commits
+            WHERE group_id = @group_id AND epoch = @epoch;";
+        cmd.Parameters.AddWithValue("@group_id", groupId.Value);
+        cmd.Parameters.AddWithValue("@epoch", (long)epoch);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+
+        return (reader.GetString(0), DateTimeOffset.Parse(reader.GetString(1)));
     }
 
     // ================================================================
@@ -672,6 +702,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
 
         cmd.Parameters.AddWithValue("@created_at", group.CreatedAt.ToString("o"));
         cmd.Parameters.AddWithValue("@updated_at", group.UpdatedAt.ToString("o"));
+        cmd.Parameters.AddWithValue("@mls_state", (object?)group.MlsState ?? DBNull.Value);
     }
 
     private static void BindMessageParams(SqliteCommand cmd, Message message)
@@ -718,6 +749,9 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             selfUpdate = new SelfUpdateState.CompletedAt(completedAt);
         }
 
+        var mlsStateOrd = reader.GetOrdinal("mls_state");
+        byte[]? mlsState = reader.IsDBNull(mlsStateOrd) ? null : (byte[])reader["mls_state"];
+
         return new Group(
             new MlsGroupId((byte[])reader["group_id"]),
             Enum.Parse<GroupState>(reader.GetString(reader.GetOrdinal("state"))),
@@ -727,7 +761,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             (ulong)(long)reader["epoch"],
             selfUpdate,
             DateTimeOffset.Parse(reader.GetString(reader.GetOrdinal("created_at"))),
-            DateTimeOffset.Parse(reader.GetString(reader.GetOrdinal("updated_at"))));
+            DateTimeOffset.Parse(reader.GetString(reader.GetOrdinal("updated_at"))),
+            mlsState);
     }
 
     private static Message ReadMessage(SqliteDataReader reader) =>

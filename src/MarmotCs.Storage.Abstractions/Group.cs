@@ -3,6 +3,9 @@ namespace MarmotCs.Storage.Abstractions;
 /// <summary>
 /// Represents an MLS group with its associated metadata.
 /// </summary>
+/// <param name="MlsState">Opaque binary MLS group state (ratchet tree, secrets, etc.).
+/// Exported via MlsGroup.Export() and imported via MlsGroup.Import().
+/// Null when creating a new group (state set after first export).</param>
 public sealed record Group(
     MlsGroupId Id,
     GroupState State,
@@ -12,4 +15,5 @@ public sealed record Group(
     ulong Epoch,
     SelfUpdateState? SelfUpdate,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    byte[]? MlsState = null);
