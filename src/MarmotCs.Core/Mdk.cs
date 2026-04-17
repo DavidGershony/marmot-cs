@@ -561,6 +561,7 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
         byte[] groupId,
         byte[] messageBytes,
         string eventId,
+        DateTimeOffset? eventCreatedAt = null,
         CancellationToken ct = default)
     {
         ThrowIfDisposed();
@@ -680,6 +681,10 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
                         await _storage.Messages.SaveProcessedMessageAsync(
                             new ProcessedMessage(eventId, gid, ProcessedMessageState.Completed, DateTimeOffset.UtcNow), ct);
 
+                        // Track which commit was applied at this epoch (MIP-03 race resolution)
+                        var commitCreatedAt = eventCreatedAt ?? DateTimeOffset.UtcNow;
+                        await _storage.Groups.SaveAppliedCommitAsync(gid, mlsGroup.Epoch, eventId, commitCreatedAt, ct);
+
                         if (_callback != null)
                             await _callback.OnEpochAdvanceAsync(groupId, mlsGroup.Epoch, ct);
 
@@ -690,7 +695,62 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
                     }
                     catch (Exception commitEx)
                     {
-                        _logger.LogWarning(commitEx, "Commit processing failed for group {GroupId}, rolling back", hex);
+                        _logger.LogWarning(commitEx, "Commit processing failed for group {GroupId}, checking for race", hex);
+
+                        // MIP-03 commit race: if this commit failed because we already
+                        // processed a different commit for this epoch, compare them and
+                        // keep the winner (earliest timestamp, then smallest event ID).
+                        if (eventCreatedAt.HasValue)
+                        {
+                            var currentEpoch = mlsGroup.Epoch;
+                            var appliedCommit = await _storage.Groups.GetAppliedCommitAsync(gid, currentEpoch, ct);
+                            if (appliedCommit.HasValue)
+                            {
+                                var winner = MarmotCs.Protocol.Mip03.CommitRaceResolver.ResolveWinner(new[]
+                                {
+                                    (eventId: appliedCommit.Value.EventId, createdAt: appliedCommit.Value.CreatedAt),
+                                    (eventId: eventId, createdAt: eventCreatedAt.Value),
+                                });
+
+                                if (winner == eventId)
+                                {
+                                    // The new commit is better — rollback and re-apply
+                                    _logger.LogInformation("Commit race won by {Winner} (replacing {Loser}) for group {GroupId} epoch {Epoch}",
+                                        eventId, appliedCommit.Value.EventId, hex, currentEpoch);
+
+                                    await _snapshots.RollbackAsync(snapshotId, ct);
+
+                                    // Re-load the group from storage after rollback
+                                    if (_groups.TryGetValue(hex, out var restoredGroup))
+                                    {
+                                        restoredGroup.ProcessCommit(privateMsg);
+
+                                        var existingGroup2 = await _storage.Groups.GetGroupAsync(gid, ct);
+                                        if (existingGroup2 != null)
+                                        {
+                                            await _storage.Groups.UpdateGroupAsync(existingGroup2 with
+                                            {
+                                                Epoch = restoredGroup.Epoch,
+                                                UpdatedAt = DateTimeOffset.UtcNow
+                                            }, ct);
+                                        }
+
+                                        await _storage.Groups.SaveAppliedCommitAsync(gid, restoredGroup.Epoch, eventId, eventCreatedAt.Value, ct);
+                                        await _storage.Messages.SaveProcessedMessageAsync(
+                                            new ProcessedMessage(eventId, gid, ProcessedMessageState.Completed, DateTimeOffset.UtcNow), ct);
+
+                                        var group = await _storage.Groups.GetGroupAsync(gid, ct);
+                                        return new CommitResult(group!);
+                                    }
+                                }
+                                else
+                                {
+                                    _logger.LogInformation("Commit race lost by {Loser} (keeping {Winner}) for group {GroupId} epoch {Epoch}",
+                                        eventId, appliedCommit.Value.EventId, hex, currentEpoch);
+                                }
+                            }
+                        }
+
                         await _snapshots.RollbackAsync(snapshotId, ct);
                         throw;
                     }
