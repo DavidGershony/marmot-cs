@@ -256,8 +256,9 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
             var (commitMsg, welcome) = mlsGroup.Commit(proposals);
             mlsGroup.MergePendingCommit();
 
-            // Serialize
-            byte[] commitBytes = TlsCodec.Serialize(writer => commitMsg.WriteTo(writer));
+            // Serialize: wrap in MLSMessage envelope (same as CreateMessageAsync)
+            var commitMlsMessage = new MlsMessage(WireFormat.MlsPrivateMessage, commitMsg);
+            byte[] commitBytes = TlsCodec.Serialize(writer => commitMlsMessage.WriteTo(writer));
             byte[]? welcomeBytes = welcome != null
                 ? TlsCodec.Serialize(writer => welcome.WriteTo(writer))
                 : null;
