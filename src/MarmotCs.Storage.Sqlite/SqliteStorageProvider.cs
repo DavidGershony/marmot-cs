@@ -12,9 +12,13 @@ namespace MarmotCs.Storage.Sqlite;
 public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, IMessageStorage, IWelcomeStorage, IDisposable
 {
     private readonly SqliteConnection _connection;
+    private readonly string _tp; // table prefix
 
-    public SqliteStorageProvider(string connectionString)
+    /// <param name="connectionString">SQLite connection string.</param>
+    /// <param name="tablePrefix">Optional prefix for all table names (e.g. "mls_") to avoid collisions when sharing a database.</param>
+    public SqliteStorageProvider(string connectionString, string tablePrefix = "")
     {
+        _tp = tablePrefix;
         _connection = new SqliteConnection(connectionString);
         _connection.Open();
 
@@ -23,7 +27,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         pragma.CommandText = "PRAGMA journal_mode=WAL;";
         pragma.ExecuteNonQuery();
 
-        SqliteMigrations.Apply(_connection);
+        SqliteMigrations.Apply(_connection, _tp);
     }
 
     // ── IMdkStorageProvider ────────────────────────────────────────────
@@ -38,8 +42,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IGroupStorage.SaveGroupAsync(Group group, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT OR REPLACE INTO groups (group_id, state, name, image, group_data, epoch,
+        cmd.CommandText = $@"
+            INSERT OR REPLACE INTO {_tp}groups (group_id, state, name, image, group_data, epoch,
                                 self_update_state, self_update_completed_at,
                                 created_at, updated_at, mls_state)
             VALUES (@group_id, @state, @name, @image, @group_data, @epoch,
@@ -52,7 +56,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<Group?> IGroupStorage.GetGroupAsync(MlsGroupId id, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM groups WHERE group_id = @group_id;";
+        cmd.CommandText = $"SELECT * FROM {_tp}groups WHERE group_id = @group_id;";
         cmd.Parameters.AddWithValue("@group_id", id.Value);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadGroup(reader) : null;
@@ -63,12 +67,12 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         await using var cmd = _connection.CreateCommand();
         if (state.HasValue)
         {
-            cmd.CommandText = "SELECT * FROM groups WHERE state = @state;";
+            cmd.CommandText = $"SELECT * FROM {_tp}groups WHERE state = @state;";
             cmd.Parameters.AddWithValue("@state", state.Value.ToString());
         }
         else
         {
-            cmd.CommandText = "SELECT * FROM groups;";
+            cmd.CommandText = $"SELECT * FROM {_tp}groups;";
         }
 
         var results = new List<Group>();
@@ -81,8 +85,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IGroupStorage.UpdateGroupAsync(Group group, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            UPDATE groups SET
+        cmd.CommandText = $@"
+            UPDATE {_tp}groups SET
                 state = @state,
                 name = @name,
                 image = @image,
@@ -101,7 +105,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IGroupStorage.DeleteGroupAsync(MlsGroupId id, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM groups WHERE group_id = @group_id;";
+        cmd.CommandText = $"DELETE FROM {_tp}groups WHERE group_id = @group_id;";
         cmd.Parameters.AddWithValue("@group_id", id.Value);
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -109,8 +113,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IGroupStorage.SaveGroupRelayAsync(GroupRelay relay, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT OR IGNORE INTO group_relays (group_id, relay_url)
+        cmd.CommandText = $@"
+            INSERT OR IGNORE INTO {_tp}group_relays (group_id, relay_url)
             VALUES (@group_id, @relay_url);";
         cmd.Parameters.AddWithValue("@group_id", relay.GroupId.Value);
         cmd.Parameters.AddWithValue("@relay_url", relay.RelayUrl);
@@ -120,7 +124,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<IReadOnlyList<GroupRelay>> IGroupStorage.GetGroupRelaysAsync(MlsGroupId groupId, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT group_id, relay_url FROM group_relays WHERE group_id = @group_id;";
+        cmd.CommandText = $"SELECT group_id, relay_url FROM {_tp}group_relays WHERE group_id = @group_id;";
         cmd.Parameters.AddWithValue("@group_id", groupId.Value);
 
         var results = new List<GroupRelay>();
@@ -137,7 +141,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IGroupStorage.DeleteGroupRelaysAsync(MlsGroupId groupId, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM group_relays WHERE group_id = @group_id;";
+        cmd.CommandText = $"DELETE FROM {_tp}group_relays WHERE group_id = @group_id;";
         cmd.Parameters.AddWithValue("@group_id", groupId.Value);
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -145,8 +149,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IGroupStorage.SaveExporterSecretAsync(GroupExporterSecret secret, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT OR REPLACE INTO exporter_secrets (group_id, epoch, secret)
+        cmd.CommandText = $@"
+            INSERT OR REPLACE INTO {_tp}exporter_secrets (group_id, epoch, secret)
             VALUES (@group_id, @epoch, @secret);";
         cmd.Parameters.AddWithValue("@group_id", secret.GroupId.Value);
         cmd.Parameters.AddWithValue("@epoch", (long)secret.Epoch);
@@ -157,8 +161,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<GroupExporterSecret?> IGroupStorage.GetExporterSecretAsync(MlsGroupId groupId, ulong epoch, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT group_id, epoch, secret FROM exporter_secrets
+        cmd.CommandText = $@"
+            SELECT group_id, epoch, secret FROM {_tp}exporter_secrets
             WHERE group_id = @group_id AND epoch = @epoch;";
         cmd.Parameters.AddWithValue("@group_id", groupId.Value);
         cmd.Parameters.AddWithValue("@epoch", (long)epoch);
@@ -176,8 +180,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IGroupStorage.SaveAppliedCommitAsync(MlsGroupId groupId, ulong epoch, string eventId, DateTimeOffset createdAt, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT OR REPLACE INTO applied_commits (group_id, epoch, event_id, created_at)
+        cmd.CommandText = $@"
+            INSERT OR REPLACE INTO {_tp}applied_commits (group_id, epoch, event_id, created_at)
             VALUES (@group_id, @epoch, @event_id, @created_at);";
         cmd.Parameters.AddWithValue("@group_id", groupId.Value);
         cmd.Parameters.AddWithValue("@epoch", (long)epoch);
@@ -189,8 +193,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<(string EventId, DateTimeOffset CreatedAt)?> IGroupStorage.GetAppliedCommitAsync(MlsGroupId groupId, ulong epoch, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT event_id, created_at FROM applied_commits
+        cmd.CommandText = $@"
+            SELECT event_id, created_at FROM {_tp}applied_commits
             WHERE group_id = @group_id AND epoch = @epoch;";
         cmd.Parameters.AddWithValue("@group_id", groupId.Value);
         cmd.Parameters.AddWithValue("@epoch", (long)epoch);
@@ -209,8 +213,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IMessageStorage.SaveMessageAsync(Message message, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT OR REPLACE INTO messages (id, group_id, sender_identity, content, epoch, state, created_at)
+        cmd.CommandText = $@"
+            INSERT OR REPLACE INTO {_tp}messages (id, group_id, sender_identity, content, epoch, state, created_at)
             VALUES (@id, @group_id, @sender_identity, @content, @epoch, @state, @created_at);";
         BindMessageParams(cmd, message);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -219,7 +223,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<Message?> IMessageStorage.GetMessageAsync(string id, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM messages WHERE id = @id;";
+        cmd.CommandText = $"SELECT * FROM {_tp}messages WHERE id = @id;";
         cmd.Parameters.AddWithValue("@id", id);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadMessage(reader) : null;
@@ -236,7 +240,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            SELECT * FROM messages
+            SELECT * FROM {_tp}messages
             WHERE group_id = @group_id
             ORDER BY created_at {dir}
             LIMIT @limit OFFSET @offset;";
@@ -254,8 +258,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<Message?> IMessageStorage.GetLastMessageAsync(MlsGroupId groupId, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT * FROM messages
+        cmd.CommandText = $@"
+            SELECT * FROM {_tp}messages
             WHERE group_id = @group_id
             ORDER BY created_at DESC
             LIMIT 1;";
@@ -268,8 +272,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IMessageStorage.SaveProcessedMessageAsync(ProcessedMessage processed, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT OR REPLACE INTO processed_messages (event_id, group_id, state, processed_at)
+        cmd.CommandText = $@"
+            INSERT OR REPLACE INTO {_tp}processed_messages (event_id, group_id, state, processed_at)
             VALUES (@event_id, @group_id, @state, @processed_at);";
         cmd.Parameters.AddWithValue("@event_id", processed.EventId);
         cmd.Parameters.AddWithValue("@group_id", processed.GroupId.Value);
@@ -281,7 +285,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<ProcessedMessage?> IMessageStorage.GetProcessedMessageAsync(string eventId, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM processed_messages WHERE event_id = @event_id;";
+        cmd.CommandText = $"SELECT * FROM {_tp}processed_messages WHERE event_id = @event_id;";
         cmd.Parameters.AddWithValue("@event_id", eventId);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -298,8 +302,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IMessageStorage.InvalidateMessagesAfterEpochAsync(MlsGroupId groupId, ulong epoch, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            DELETE FROM messages
+        cmd.CommandText = $@"
+            DELETE FROM {_tp}messages
             WHERE group_id = @group_id AND epoch > @epoch;";
         cmd.Parameters.AddWithValue("@group_id", groupId.Value);
         cmd.Parameters.AddWithValue("@epoch", (long)epoch);
@@ -313,8 +317,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IWelcomeStorage.SaveWelcomeAsync(Welcome welcome, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT OR REPLACE INTO welcomes (id, group_id, welcome_data, state, group_data,
+        cmd.CommandText = $@"
+            INSERT OR REPLACE INTO {_tp}welcomes (id, group_id, welcome_data, state, group_data,
                                   sender_nostr_pubkey, created_at)
             VALUES (@id, @group_id, @welcome_data, @state, @group_data,
                     @sender_nostr_pubkey, @created_at);";
@@ -325,7 +329,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<Welcome?> IWelcomeStorage.GetWelcomeAsync(string id, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM welcomes WHERE id = @id;";
+        cmd.CommandText = $"SELECT * FROM {_tp}welcomes WHERE id = @id;";
         cmd.Parameters.AddWithValue("@id", id);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadWelcome(reader) : null;
@@ -334,7 +338,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<IReadOnlyList<Welcome>> IWelcomeStorage.GetPendingWelcomesAsync(CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM welcomes WHERE state = @state;";
+        cmd.CommandText = $"SELECT * FROM {_tp}welcomes WHERE state = @state;";
         cmd.Parameters.AddWithValue("@state", WelcomeState.Pending.ToString());
 
         var results = new List<Welcome>();
@@ -347,8 +351,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IWelcomeStorage.UpdateWelcomeAsync(Welcome welcome, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            UPDATE welcomes SET
+        cmd.CommandText = $@"
+            UPDATE {_tp}welcomes SET
                 group_id = @group_id,
                 welcome_data = @welcome_data,
                 state = @state,
@@ -363,8 +367,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task IWelcomeStorage.SaveProcessedWelcomeAsync(ProcessedWelcome processed, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT OR REPLACE INTO processed_welcomes (event_id, state, processed_at)
+        cmd.CommandText = $@"
+            INSERT OR REPLACE INTO {_tp}processed_welcomes (event_id, state, processed_at)
             VALUES (@event_id, @state, @processed_at);";
         cmd.Parameters.AddWithValue("@event_id", processed.EventId);
         cmd.Parameters.AddWithValue("@state", processed.State.ToString());
@@ -375,7 +379,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     async Task<ProcessedWelcome?> IWelcomeStorage.GetProcessedWelcomeAsync(string eventId, CancellationToken ct)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM processed_welcomes WHERE event_id = @event_id;";
+        cmd.CommandText = $"SELECT * FROM {_tp}processed_welcomes WHERE event_id = @event_id;";
         cmd.Parameters.AddWithValue("@event_id", eventId);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -402,7 +406,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         // Collect group
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT * FROM groups WHERE group_id = @gid;";
+            cmd.CommandText = $"SELECT * FROM {_tp}groups WHERE group_id = @gid;";
             cmd.Parameters.AddWithValue("@gid", groupIdBytes);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             if (await r.ReadAsync(ct))
@@ -412,7 +416,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         // Collect relays
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT * FROM group_relays WHERE group_id = @gid;";
+            cmd.CommandText = $"SELECT * FROM {_tp}group_relays WHERE group_id = @gid;";
             cmd.Parameters.AddWithValue("@gid", groupIdBytes);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
@@ -426,7 +430,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         // Collect exporter secrets
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT * FROM exporter_secrets WHERE group_id = @gid;";
+            cmd.CommandText = $"SELECT * FROM {_tp}exporter_secrets WHERE group_id = @gid;";
             cmd.Parameters.AddWithValue("@gid", groupIdBytes);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
@@ -441,7 +445,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         // Collect messages
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT * FROM messages WHERE group_id = @gid;";
+            cmd.CommandText = $"SELECT * FROM {_tp}messages WHERE group_id = @gid;";
             cmd.Parameters.AddWithValue("@gid", groupIdBytes);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
@@ -451,7 +455,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         // Collect processed messages
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT * FROM processed_messages WHERE group_id = @gid;";
+            cmd.CommandText = $"SELECT * FROM {_tp}processed_messages WHERE group_id = @gid;";
             cmd.Parameters.AddWithValue("@gid", groupIdBytes);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
@@ -467,7 +471,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         // Collect welcomes
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT * FROM welcomes WHERE group_id = @gid;";
+            cmd.CommandText = $"SELECT * FROM {_tp}welcomes WHERE group_id = @gid;";
             cmd.Parameters.AddWithValue("@gid", groupIdBytes);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
@@ -477,7 +481,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
         // Collect processed welcomes (all, since they are not group-keyed)
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT * FROM processed_welcomes;";
+            cmd.CommandText = $"SELECT * FROM {_tp}processed_welcomes;";
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
                 snapshotData.ProcessedWelcomes.Add(new ProcessedWelcomeDto
@@ -493,8 +497,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
 
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = @"
-                INSERT INTO snapshots (id, group_id, data, created_at)
+            cmd.CommandText = $@"
+                INSERT INTO {_tp}snapshots (id, group_id, data, created_at)
                 VALUES (@id, @group_id, @data, @created_at);";
             cmd.Parameters.AddWithValue("@id", snapshotId);
             cmd.Parameters.AddWithValue("@group_id", groupIdBytes);
@@ -513,7 +517,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
 
         await using (var cmd = _connection.CreateCommand())
         {
-            cmd.CommandText = "SELECT group_id, data FROM snapshots WHERE id = @id;";
+            cmd.CommandText = $"SELECT group_id, data FROM {_tp}snapshots WHERE id = @id;";
             cmd.Parameters.AddWithValue("@id", snapshotId);
             await using var r = await cmd.ExecuteReaderAsync(ct);
             if (!await r.ReadAsync(ct))
@@ -536,8 +540,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             {
                 var group = DtoToGroup(snap.Group);
                 await using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT INTO groups (group_id, state, name, image, group_data, epoch,
+                cmd.CommandText = $@"
+                    INSERT INTO {_tp}groups (group_id, state, name, image, group_data, epoch,
                                         self_update_state, self_update_completed_at,
                                         created_at, updated_at)
                     VALUES (@group_id, @state, @name, @image, @group_data, @epoch,
@@ -551,8 +555,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             foreach (var dto in snap.Relays)
             {
                 await using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT OR IGNORE INTO group_relays (group_id, relay_url)
+                cmd.CommandText = $@"
+                    INSERT OR IGNORE INTO {_tp}group_relays (group_id, relay_url)
                     VALUES (@group_id, @relay_url);";
                 cmd.Parameters.AddWithValue("@group_id", Convert.FromBase64String(dto.GroupId));
                 cmd.Parameters.AddWithValue("@relay_url", dto.RelayUrl);
@@ -563,8 +567,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             foreach (var dto in snap.ExporterSecrets)
             {
                 await using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT OR REPLACE INTO exporter_secrets (group_id, epoch, secret)
+                cmd.CommandText = $@"
+                    INSERT OR REPLACE INTO {_tp}exporter_secrets (group_id, epoch, secret)
                     VALUES (@group_id, @epoch, @secret);";
                 cmd.Parameters.AddWithValue("@group_id", Convert.FromBase64String(dto.GroupId));
                 cmd.Parameters.AddWithValue("@epoch", (long)dto.Epoch);
@@ -577,8 +581,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             {
                 var msg = DtoToMessage(dto);
                 await using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT OR REPLACE INTO messages (id, group_id, sender_identity, content, epoch, state, created_at)
+                cmd.CommandText = $@"
+                    INSERT OR REPLACE INTO {_tp}messages (id, group_id, sender_identity, content, epoch, state, created_at)
                     VALUES (@id, @group_id, @sender_identity, @content, @epoch, @state, @created_at);";
                 BindMessageParams(cmd, msg);
                 await cmd.ExecuteNonQueryAsync(ct);
@@ -588,8 +592,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             foreach (var dto in snap.ProcessedMessages)
             {
                 await using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT OR REPLACE INTO processed_messages (event_id, group_id, state, processed_at)
+                cmd.CommandText = $@"
+                    INSERT OR REPLACE INTO {_tp}processed_messages (event_id, group_id, state, processed_at)
                     VALUES (@event_id, @group_id, @state, @processed_at);";
                 cmd.Parameters.AddWithValue("@event_id", dto.EventId);
                 cmd.Parameters.AddWithValue("@group_id", Convert.FromBase64String(dto.GroupId));
@@ -603,8 +607,8 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             {
                 var w = DtoToWelcome(dto);
                 await using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT OR REPLACE INTO welcomes (id, group_id, welcome_data, state, group_data,
+                cmd.CommandText = $@"
+                    INSERT OR REPLACE INTO {_tp}welcomes (id, group_id, welcome_data, state, group_data,
                                           sender_nostr_pubkey, created_at)
                     VALUES (@id, @group_id, @welcome_data, @state, @group_data,
                             @sender_nostr_pubkey, @created_at);";
@@ -615,15 +619,15 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
             // Restore processed welcomes (full replacement)
             await using (var delCmd = _connection.CreateCommand())
             {
-                delCmd.CommandText = "DELETE FROM processed_welcomes;";
+                delCmd.CommandText = $"DELETE FROM {_tp}processed_welcomes;";
                 await delCmd.ExecuteNonQueryAsync(ct);
             }
 
             foreach (var dto in snap.ProcessedWelcomes)
             {
                 await using var cmd = _connection.CreateCommand();
-                cmd.CommandText = @"
-                    INSERT OR REPLACE INTO processed_welcomes (event_id, state, processed_at)
+                cmd.CommandText = $@"
+                    INSERT OR REPLACE INTO {_tp}processed_welcomes (event_id, state, processed_at)
                     VALUES (@event_id, @state, @processed_at);";
                 cmd.Parameters.AddWithValue("@event_id", dto.EventId);
                 cmd.Parameters.AddWithValue("@state", dto.State);
@@ -643,7 +647,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     public async Task ReleaseSnapshotAsync(string snapshotId, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM snapshots WHERE id = @id;";
+        cmd.CommandText = $"DELETE FROM {_tp}snapshots WHERE id = @id;";
         cmd.Parameters.AddWithValue("@id", snapshotId);
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -651,11 +655,11 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
     public async Task PruneSnapshotsAsync(MlsGroupId groupId, int keepCount, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            DELETE FROM snapshots
+        cmd.CommandText = $@"
+            DELETE FROM {_tp}snapshots
             WHERE group_id = @group_id
               AND id NOT IN (
-                  SELECT id FROM snapshots
+                  SELECT id FROM {_tp}snapshots
                   WHERE group_id = @group_id
                   ORDER BY created_at DESC
                   LIMIT @keep
@@ -793,7 +797,7 @@ public sealed class SqliteStorageProvider : IMdkStorageProvider, IGroupStorage, 
 
     private async Task DeleteGroupDataAsync(byte[] groupIdBytes, CancellationToken ct)
     {
-        string[] tables = { "groups", "group_relays", "exporter_secrets", "messages", "processed_messages", "welcomes" };
+        string[] tables = { $"{_tp}groups", $"{_tp}group_relays", $"{_tp}exporter_secrets", $"{_tp}messages", $"{_tp}processed_messages", $"{_tp}welcomes" };
         foreach (var table in tables)
         {
             await using var cmd = _connection.CreateCommand();

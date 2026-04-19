@@ -9,7 +9,7 @@ namespace MarmotCs.Storage.Sqlite;
 /// </summary>
 internal static class SqliteMigrations
 {
-    private static readonly (int Version, string Name, Action<SqliteConnection> Apply)[] Migrations =
+    private static readonly (int Version, string Name, Action<SqliteConnection, string> Apply)[] Migrations =
     {
         (1, "Core tables", V001),
         (2, "Snapshots table", V002),
@@ -22,11 +22,13 @@ internal static class SqliteMigrations
     /// <summary>
     /// Applies all pending migrations to the given open connection.
     /// </summary>
-    public static void Apply(SqliteConnection connection)
+    /// <param name="connection">An open SQLite connection.</param>
+    /// <param name="tablePrefix">Optional prefix for all table and index names (e.g. "mls_").</param>
+    public static void Apply(SqliteConnection connection, string tablePrefix = "")
     {
-        EnsureSchemaVersionTable(connection);
+        EnsureSchemaVersionTable(connection, tablePrefix);
 
-        var currentVersion = GetCurrentVersion(connection);
+        var currentVersion = GetCurrentVersion(connection, tablePrefix);
 
         foreach (var (version, name, apply) in Migrations)
         {
@@ -36,8 +38,8 @@ internal static class SqliteMigrations
             using var transaction = connection.BeginTransaction();
             try
             {
-                apply(connection);
-                RecordVersion(connection, version, name);
+                apply(connection, tablePrefix);
+                RecordVersion(connection, version, name, tablePrefix);
                 transaction.Commit();
             }
             catch
@@ -52,11 +54,11 @@ internal static class SqliteMigrations
     // Schema version tracking
     // ────────────────────────────────────────────────────────────────
 
-    private static void EnsureSchemaVersionTable(SqliteConnection connection)
+    private static void EnsureSchemaVersionTable(SqliteConnection connection, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            CREATE TABLE IF NOT EXISTS schema_version (
+        cmd.CommandText = $@"
+            CREATE TABLE IF NOT EXISTS {tp}schema_version (
                 version     INTEGER PRIMARY KEY,
                 name        TEXT    NOT NULL,
                 applied_at  TEXT    NOT NULL
@@ -64,18 +66,18 @@ internal static class SqliteMigrations
         cmd.ExecuteNonQuery();
     }
 
-    private static int GetCurrentVersion(SqliteConnection connection)
+    private static int GetCurrentVersion(SqliteConnection connection, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT COALESCE(MAX(version), 0) FROM schema_version;";
+        cmd.CommandText = $"SELECT COALESCE(MAX(version), 0) FROM {tp}schema_version;";
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
-    private static void RecordVersion(SqliteConnection connection, int version, string name)
+    private static void RecordVersion(SqliteConnection connection, int version, string name, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO schema_version (version, name, applied_at)
+        cmd.CommandText = $@"
+            INSERT INTO {tp}schema_version (version, name, applied_at)
             VALUES (@version, @name, @applied_at);";
         cmd.Parameters.AddWithValue("@version", version);
         cmd.Parameters.AddWithValue("@name", name);
@@ -87,11 +89,11 @@ internal static class SqliteMigrations
     // V001 – Core tables
     // ────────────────────────────────────────────────────────────────
 
-    private static void V001(SqliteConnection connection)
+    private static void V001(SqliteConnection connection, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            CREATE TABLE groups (
+        cmd.CommandText = $@"
+            CREATE TABLE {tp}groups (
                 group_id                    BLOB    NOT NULL PRIMARY KEY,
                 state                       TEXT    NOT NULL,
                 name                        TEXT    NOT NULL,
@@ -104,7 +106,7 @@ internal static class SqliteMigrations
                 updated_at                  TEXT    NOT NULL
             );
 
-            CREATE TABLE messages (
+            CREATE TABLE {tp}messages (
                 id                  TEXT    NOT NULL PRIMARY KEY,
                 group_id            BLOB   NOT NULL,
                 sender_identity     BLOB   NOT NULL,
@@ -114,14 +116,14 @@ internal static class SqliteMigrations
                 created_at          TEXT    NOT NULL
             );
 
-            CREATE TABLE processed_messages (
+            CREATE TABLE {tp}processed_messages (
                 event_id        TEXT    NOT NULL PRIMARY KEY,
                 group_id        BLOB   NOT NULL,
                 state           TEXT    NOT NULL,
                 processed_at    TEXT    NOT NULL
             );
 
-            CREATE TABLE welcomes (
+            CREATE TABLE {tp}welcomes (
                 id                      TEXT    NOT NULL PRIMARY KEY,
                 group_id                BLOB   NOT NULL,
                 welcome_data            BLOB   NOT NULL,
@@ -131,19 +133,19 @@ internal static class SqliteMigrations
                 created_at              TEXT    NOT NULL
             );
 
-            CREATE TABLE processed_welcomes (
+            CREATE TABLE {tp}processed_welcomes (
                 event_id        TEXT    NOT NULL PRIMARY KEY,
                 state           TEXT    NOT NULL,
                 processed_at    TEXT    NOT NULL
             );
 
-            CREATE TABLE group_relays (
+            CREATE TABLE {tp}group_relays (
                 group_id    BLOB    NOT NULL,
                 relay_url   TEXT    NOT NULL,
                 PRIMARY KEY (group_id, relay_url)
             );
 
-            CREATE TABLE exporter_secrets (
+            CREATE TABLE {tp}exporter_secrets (
                 group_id    BLOB    NOT NULL,
                 epoch       INTEGER NOT NULL,
                 secret      BLOB    NOT NULL,
@@ -156,11 +158,11 @@ internal static class SqliteMigrations
     // V002 – Snapshots table
     // ────────────────────────────────────────────────────────────────
 
-    private static void V002(SqliteConnection connection)
+    private static void V002(SqliteConnection connection, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            CREATE TABLE snapshots (
+        cmd.CommandText = $@"
+            CREATE TABLE {tp}snapshots (
                 id          TEXT    NOT NULL PRIMARY KEY,
                 group_id    BLOB   NOT NULL,
                 data        BLOB   NOT NULL,
@@ -173,12 +175,12 @@ internal static class SqliteMigrations
     // V003 – Indexes for common query patterns
     // ────────────────────────────────────────────────────────────────
 
-    private static void V003(SqliteConnection connection)
+    private static void V003(SqliteConnection connection, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            CREATE INDEX idx_messages_group ON messages(group_id, created_at);
-            CREATE INDEX idx_welcomes_state ON welcomes(state);";
+        cmd.CommandText = $@"
+            CREATE INDEX {tp}idx_messages_group ON {tp}messages(group_id, created_at);
+            CREATE INDEX {tp}idx_welcomes_state ON {tp}welcomes(state);";
         cmd.ExecuteNonQuery();
     }
 
@@ -186,11 +188,11 @@ internal static class SqliteMigrations
     // V004 – Message sort by epoch index
     // ────────────────────────────────────────────────────────────────
 
-    private static void V004(SqliteConnection connection)
+    private static void V004(SqliteConnection connection, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            CREATE INDEX idx_messages_epoch ON messages(group_id, epoch);";
+        cmd.CommandText = $@"
+            CREATE INDEX {tp}idx_messages_epoch ON {tp}messages(group_id, epoch);";
         cmd.ExecuteNonQuery();
     }
 
@@ -198,10 +200,10 @@ internal static class SqliteMigrations
     // V005 – MLS binary state on groups table
     // ────────────────────────────────────────────────────────────────
 
-    private static void V005(SqliteConnection connection)
+    private static void V005(SqliteConnection connection, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"ALTER TABLE groups ADD COLUMN mls_state BLOB;";
+        cmd.CommandText = $@"ALTER TABLE {tp}groups ADD COLUMN mls_state BLOB;";
         cmd.ExecuteNonQuery();
     }
 
@@ -209,11 +211,11 @@ internal static class SqliteMigrations
     // V006 – Applied commits tracking for MIP-03 race resolution
     // ────────────────────────────────────────────────────────────────
 
-    private static void V006(SqliteConnection connection)
+    private static void V006(SqliteConnection connection, string tp)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = @"
-            CREATE TABLE applied_commits (
+        cmd.CommandText = $@"
+            CREATE TABLE {tp}applied_commits (
                 group_id    BLOB    NOT NULL,
                 epoch       INTEGER NOT NULL,
                 event_id    TEXT    NOT NULL,
