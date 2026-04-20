@@ -1,5 +1,9 @@
 <Project>
   <PropertyGroup>
+    <_ParentBuildProps>$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))</_ParentBuildProps>
+  </PropertyGroup>
+  <Import Project="$(_ParentBuildProps)" Condition="'$(_ParentBuildProps)' != ''" />
+  <PropertyGroup>
     <Version>0.1.0-beta.3</Version>
     <Authors>DavidGershony</Authors>
     <Description>Marmot CS - C# secure group messaging with MLS (RFC 9420) + Nostr</Description>

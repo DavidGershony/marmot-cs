@@ -491,6 +491,20 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
             GroupEventEncryption.ExporterLength);
     }
 
+    /// <summary>
+    /// Returns an MLS exporter secret with custom label, context, and length.
+    /// Use for MIP-04 media encryption or other custom export contexts.
+    /// </summary>
+    public byte[] GetExporterSecret(byte[] groupId, string label, byte[] context, int length)
+    {
+        ThrowIfDisposed();
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        return mlsGroup.ExportSecret(label, context, length);
+    }
+
     // ====== Messages ======
 
     /// <summary>
