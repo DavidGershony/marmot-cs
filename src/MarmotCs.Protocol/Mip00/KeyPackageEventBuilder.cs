@@ -1,26 +1,30 @@
+using System.Security.Cryptography;
 using DotnetMls.Crypto;
 using DotnetMls.Types;
 
 namespace MarmotCs.Protocol.Mip00;
 
 /// <summary>
-/// Builds the content and tags for a Nostr kind 443 event containing an MLS KeyPackage.
+/// Builds the content and tags for a Nostr kind 30443 (addressable) event containing an MLS KeyPackage.
 /// </summary>
 /// <remarks>
 /// MIP-00 defines the format for publishing MLS KeyPackages to Nostr relays:
 /// <list type="bullet">
 ///   <item>Content: base64-encoded MLS KeyPackage bytes.</item>
-///   <item>Tags: encoding, protocol_version, ciphersuite, extensions, relays, and i (KeyPackageRef).</item>
+///   <item>Tags: d (slot), encoding, protocol_version, ciphersuite, extensions, relays, and i (KeyPackageRef).</item>
 /// </list>
+/// Kind 30443 is an addressable event — relays auto-replace by (kind, pubkey, d-tag) tuple.
 /// </remarks>
 public static class KeyPackageEventBuilder
 {
     /// <summary>
-    /// Creates the content string and tags array for a kind 443 Nostr event.
+    /// Creates the content string and tags array for a kind 30443 Nostr event.
     /// </summary>
     /// <param name="keyPackageBytes">The serialized MLS KeyPackage bytes.</param>
     /// <param name="identityHex">Hex-encoded identity (typically the Nostr public key).</param>
     /// <param name="relays">List of relay URLs where this key package should be discoverable.</param>
+    /// <param name="supportedExtensionTypes">Optional MLS extension type IDs to advertise.</param>
+    /// <param name="slotId">Optional d-tag value for addressable event slot. If null, a random 32-byte hex value is generated.</param>
     /// <returns>
     /// A tuple of (content, tags) where content is the base64-encoded KeyPackage
     /// and tags is the array of string arrays for the Nostr event.
@@ -31,7 +35,8 @@ public static class KeyPackageEventBuilder
         byte[] keyPackageBytes,
         string identityHex,
         string[] relays,
-        ushort[]? supportedExtensionTypes = null)
+        ushort[]? supportedExtensionTypes = null,
+        string? slotId = null)
     {
         ArgumentNullException.ThrowIfNull(keyPackageBytes);
         ArgumentNullException.ThrowIfNull(identityHex);
@@ -43,6 +48,13 @@ public static class KeyPackageEventBuilder
             throw new ArgumentException("Identity hex must not be empty.", nameof(identityHex));
 
         string content = Convert.ToBase64String(keyPackageBytes);
+
+        // Generate d-tag slot ID if not provided (random 32-byte hex)
+        if (string.IsNullOrEmpty(slotId))
+        {
+            var slotBytes = RandomNumberGenerator.GetBytes(32);
+            slotId = Convert.ToHexString(slotBytes).ToLowerInvariant();
+        }
 
         // Compute KeyPackageRef per RFC 9420 Section 5.2:
         // MakeKeyPackageRef(value) = RefHash("MLS 1.0 KeyPackage Reference", value)
@@ -63,12 +75,15 @@ public static class KeyPackageEventBuilder
                 extensionsTag.Add($"0x{extType:x4}");
         }
 
+        // d tag first — required for kind 30443 addressable events
         string[][] tags = new[]
         {
+            new[] { "d", slotId },
             new[] { "encoding", "base64" },
             new[] { "mls_protocol_version", "1.0" },
             new[] { "mls_ciphersuite", "0x0001" },
             extensionsTag.ToArray(),
+            new[] { "mls_proposals", "0x000a" },
             relaysTag,
             new[] { "i", kpRefHex }
         };

@@ -1,12 +1,12 @@
 namespace MarmotCs.Protocol.Mip00;
 
 /// <summary>
-/// Parses the content and tags of a Nostr kind 443 event to extract MLS KeyPackage data.
+/// Parses the content and tags of a Nostr kind 30443 event to extract MLS KeyPackage data.
 /// </summary>
 public static class KeyPackageEventParser
 {
     /// <summary>
-    /// Parses a kind 443 Nostr event's content and tags to extract the KeyPackage bytes,
+    /// Parses a kind 30443 Nostr event's content and tags to extract the KeyPackage bytes,
     /// KeyPackageRef hex, and relay URLs.
     /// </summary>
     /// <param name="content">The base64-encoded content of the Nostr event.</param>

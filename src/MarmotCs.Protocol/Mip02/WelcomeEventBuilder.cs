@@ -11,7 +11,7 @@ public static class WelcomeEventBuilder
     /// </summary>
     /// <param name="welcomeBytes">The serialized MLS Welcome message bytes.</param>
     /// <param name="keyPackageEventId">
-    /// The Nostr event ID of the kind 443 KeyPackage event that this Welcome is in response to.
+    /// The Nostr event ID of the kind 30443 KeyPackage event that this Welcome is in response to.
     /// </param>
     /// <param name="relays">List of relay URLs for the event.</param>
     /// <returns>

@@ -827,7 +827,7 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     // ====== Key Packages ======
 
     /// <summary>
-    /// Creates a new MLS key package for publishing to Nostr relays (kind 443).
+    /// Creates a new MLS key package for publishing to Nostr relays (kind 30443).
     /// </summary>
     /// <param name="identity">The member's identity bytes.</param>
     /// <param name="signingPrivateKey">The member's Ed25519 private signing key.</param>
@@ -857,7 +857,7 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     }
 
     /// <summary>
-    /// Parses a received Nostr kind 443 key package event.
+    /// Parses a received Nostr kind 30443 key package event.
     /// </summary>
     /// <param name="content">The base64-encoded event content.</param>
     /// <param name="tags">The event tags.</param>
