@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using DotnetMls.Crypto;
 using Org.BouncyCastle.Crypto.Parameters;
 using BcChaCha20Poly1305 = Org.BouncyCastle.Crypto.Modes.ChaCha20Poly1305;
 
@@ -120,6 +121,6 @@ public static class ImageEncryption
         if (exporterSecret.Length == 0)
             throw new ArgumentException("Exporter secret must not be empty.", nameof(exporterSecret));
 
-        return HKDF.Expand(HashAlgorithmName.SHA256, exporterSecret, 32, ImageKeyLabel);
+        return HkdfProvider.ExpandSha256(exporterSecret, ImageKeyLabel, 32);
     }
 }

@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using DotnetMls.Crypto;
 
 namespace MarmotCs.Protocol.Nip44;
 
@@ -48,7 +48,7 @@ public sealed class Nip44MessageKeys
             throw new ArgumentException("Nonce must be 32 bytes.", nameof(nonce));
 
         // HKDF-Expand with the conversation key as PRK and the nonce as info, producing 76 bytes
-        byte[] expanded = HKDF.Expand(HashAlgorithmName.SHA256, conversationKey, 76, nonce);
+        byte[] expanded = HkdfProvider.ExpandSha256(conversationKey, nonce, 76);
 
         byte[] encryptionKey = new byte[32];
         byte[] chachaNonce = new byte[12];

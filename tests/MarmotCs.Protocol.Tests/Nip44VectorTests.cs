@@ -10,6 +10,7 @@ namespace MarmotCs.Protocol.Tests;
 /// NIP-44 v2 compliance tests using official test vectors from
 /// https://github.com/block-core/nostr-client/blob/master/nip44.vectors.json
 /// </summary>
+[Trait("Category", "HkdfLinuxRegression")]
 public class Nip44VectorTests
 {
     private static readonly string VectorsPath =

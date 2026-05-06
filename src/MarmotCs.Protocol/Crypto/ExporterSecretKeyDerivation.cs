@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using DotnetMls.Crypto;
 using NBitcoin.Secp256k1;
 
 namespace MarmotCs.Protocol.Crypto;
@@ -33,7 +34,7 @@ public static class ExporterSecretKeyDerivation
 
         // Derive a 32-byte private key candidate using HKDF-Expand
         // private_key = HKDF-Expand(SHA256, exporter_secret, "marmot-nostr-key", 32)
-        byte[] privateKeyBytes = HKDF.Expand(HashAlgorithmName.SHA256, exporterSecret, 32, KeyDerivationLabel);
+        byte[] privateKeyBytes = HkdfProvider.ExpandSha256(exporterSecret, KeyDerivationLabel, 32);
 
         // Ensure the derived key is a valid secp256k1 private key (non-zero, < curve order)
         // If it happens to be invalid (astronomically unlikely), increment and retry
@@ -47,7 +48,7 @@ public static class ExporterSecretKeyDerivation
                 Buffer.BlockCopy(KeyDerivationLabel, 0, retryLabel, 0, KeyDerivationLabel.Length);
                 retryLabel[^1] = (byte)i;
 
-                privateKeyBytes = HKDF.Expand(HashAlgorithmName.SHA256, exporterSecret, 32, retryLabel);
+                privateKeyBytes = HkdfProvider.ExpandSha256(exporterSecret, retryLabel, 32);
                 if (ECPrivKey.TryCreate(privateKeyBytes, out privKey))
                     break;
             }

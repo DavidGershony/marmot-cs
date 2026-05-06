@@ -16,6 +16,7 @@ namespace MarmotCs.Protocol.Tests;
 // NIP-44 Tests
 // ================================================================
 
+[Trait("Category", "HkdfLinuxRegression")]
 public class Nip44EncryptionTests
 {
     [Fact]
@@ -173,6 +174,7 @@ public class Nip44PaddingTests
     }
 }
 
+[Trait("Category", "HkdfLinuxRegression")]
 public class Nip44MessageKeysTests
 {
     [Fact]
@@ -896,6 +898,7 @@ public class GroupEventTests
 // NIP-59 GiftWrap Tests
 // ================================================================
 
+[Trait("Category", "HkdfLinuxRegression")]
 public class GiftWrapTests
 {
     private static (byte[] privKey, byte[] pubKey) GenerateKeyPair()
@@ -1109,5 +1112,126 @@ public class CommitRaceResolverTests
 
         // event1 and event2 tie on time; event1 < event2 lexicographically
         Assert.Equal("event1", CommitRaceResolver.ResolveWinner(commits));
+    }
+}
+
+// ================================================================
+// HKDF-dependent crypto coverage — exercises the call sites that
+// route through HkdfProvider (the .NET HKDF.Expand-on-Linux fix).
+// ================================================================
+
+public class ExporterSecretKeyDerivationTests
+{
+    [Fact]
+    [Trait("Category", "HkdfLinuxRegression")]
+    public void DeriveKeyPair_ProducesCorrectLengths()
+    {
+        var exporterSecret = new byte[32];
+        for (int i = 0; i < 32; i++) exporterSecret[i] = (byte)i;
+
+        var (priv, pub) = ExporterSecretKeyDerivation.DeriveKeyPair(exporterSecret);
+
+        Assert.Equal(32, priv.Length);
+        Assert.Equal(32, pub.Length);
+    }
+
+    [Fact]
+    [Trait("Category", "HkdfLinuxRegression")]
+    public void DeriveKeyPair_IsDeterministic()
+    {
+        var secret = new byte[32];
+        for (int i = 0; i < 32; i++) secret[i] = (byte)(0xA0 + i);
+
+        var (priv1, pub1) = ExporterSecretKeyDerivation.DeriveKeyPair(secret);
+        var (priv2, pub2) = ExporterSecretKeyDerivation.DeriveKeyPair(secret);
+
+        Assert.Equal(priv1, priv2);
+        Assert.Equal(pub1, pub2);
+    }
+
+    [Fact]
+    [Trait("Category", "HkdfLinuxRegression")]
+    public void DeriveKeyPair_DifferentSecrets_ProduceDifferentKeys()
+    {
+        var s1 = new byte[32];
+        var s2 = new byte[32];
+        s1[0] = 1;
+        s2[0] = 2;
+
+        var (priv1, _) = ExporterSecretKeyDerivation.DeriveKeyPair(s1);
+        var (priv2, _) = ExporterSecretKeyDerivation.DeriveKeyPair(s2);
+
+        Assert.NotEqual(priv1, priv2);
+    }
+
+    [Fact]
+    public void DeriveKeyPair_NullSecret_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            ExporterSecretKeyDerivation.DeriveKeyPair(null!));
+    }
+
+    [Fact]
+    public void DeriveKeyPair_EmptySecret_Throws()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            ExporterSecretKeyDerivation.DeriveKeyPair(Array.Empty<byte>()));
+    }
+}
+
+public class ImageEncryptionTests
+{
+    [Fact]
+    [Trait("Category", "HkdfLinuxRegression")]
+    public void DeriveImageKey_ProducesCorrectLength()
+    {
+        var secret = new byte[32];
+        secret[0] = 0x42;
+
+        var key = ImageEncryption.DeriveImageKey(secret);
+
+        Assert.Equal(32, key.Length);
+    }
+
+    [Fact]
+    [Trait("Category", "HkdfLinuxRegression")]
+    public void DeriveImageKey_IsDeterministic()
+    {
+        var secret = new byte[32];
+        for (int i = 0; i < 32; i++) secret[i] = (byte)i;
+
+        var key1 = ImageEncryption.DeriveImageKey(secret);
+        var key2 = ImageEncryption.DeriveImageKey(secret);
+
+        Assert.Equal(key1, key2);
+    }
+
+    [Fact]
+    [Trait("Category", "HkdfLinuxRegression")]
+    public void EncryptDecrypt_WithDerivedKey_RoundTrips()
+    {
+        var secret = new byte[32];
+        for (int i = 0; i < 32; i++) secret[i] = (byte)(0x10 + i);
+        var key = ImageEncryption.DeriveImageKey(secret);
+        var image = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+        var encrypted = ImageEncryption.Encrypt(image, key);
+        var decrypted = ImageEncryption.Decrypt(encrypted, key);
+
+        Assert.Equal(image, decrypted);
+    }
+
+    [Fact]
+    public void DeriveImageKey_NullSecret_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            ImageEncryption.DeriveImageKey(null!));
+    }
+
+    [Fact]
+    public void DeriveImageKey_EmptySecret_Throws()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            ImageEncryption.DeriveImageKey(Array.Empty<byte>()));
     }
 }
