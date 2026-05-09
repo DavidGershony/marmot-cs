@@ -833,13 +833,21 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     /// <param name="signingPrivateKey">The member's Ed25519 private signing key.</param>
     /// <param name="signingPublicKey">The member's Ed25519 public signing key.</param>
     /// <param name="relays">Relay URLs for key package discovery.</param>
+    /// <param name="supportedExtensionTypes">Optional MLS extension type IDs to advertise.</param>
+    /// <param name="slotId">
+    /// Optional stable d-tag value for the kind 30443 addressable event slot. See
+    /// <see cref="MarmotCs.Protocol.Mip00.KeyPackageEventBuilder.BuildKeyPackageEvent"/> for the
+    /// rotation contract; production callers SHOULD persist a single slot ID and reuse it on every
+    /// rotation so the relay replaces the previous KeyPackage in place.
+    /// </param>
     /// <returns>The serialized key package bytes and Nostr event tags.</returns>
     public (byte[] keyPackageBytes, string[][] tags) CreateKeyPackage(
         byte[] identity,
         byte[] signingPrivateKey,
         byte[] signingPublicKey,
         string[] relays,
-        ushort[]? supportedExtensionTypes = null)
+        ushort[]? supportedExtensionTypes = null,
+        string? slotId = null)
     {
         var keyPackage = MlsGroup.CreateKeyPackage(
             _cipherSuite, identity, signingPrivateKey, signingPublicKey,
@@ -848,7 +856,7 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
         byte[] kpBytes = TlsCodec.Serialize(writer => keyPackage.WriteTo(writer));
 
         var (content, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(
-            kpBytes, Convert.ToHexString(identity), relays, supportedExtensionTypes);
+            kpBytes, Convert.ToHexString(identity), relays, supportedExtensionTypes, slotId);
 
         // Note: In production, initPriv and hpkePriv should be persisted securely
         // for later Welcome processing.

@@ -408,6 +408,74 @@ public class Mip00Tests
         Assert.Equal(64, kpRef.Length);
         Convert.FromHexString(kpRef);
     }
+
+    // ----- KeyPackage slot ID (d-tag) rotation contract -----
+
+    [Fact]
+    public void KeyPackageSlotId_GenerateNew_Returns64CharLowercaseHex()
+    {
+        string slot = KeyPackageSlotId.GenerateNew();
+
+        Assert.Equal(64, slot.Length);
+        Assert.Equal(slot, slot.ToLowerInvariant());
+        Convert.FromHexString(slot); // must parse as hex
+    }
+
+    [Fact]
+    public void KeyPackageSlotId_GenerateNew_ProducesUniqueValues()
+    {
+        var slots = new HashSet<string>();
+        for (int i = 0; i < 16; i++)
+            Assert.True(slots.Add(KeyPackageSlotId.GenerateNew()), "GenerateNew returned a duplicate value");
+    }
+
+    [Fact]
+    public void Build_NoSlotId_GeneratesDifferentDTagPerCall()
+    {
+        // Documents the one-shot fallback behaviour: omitting slotId creates a fresh slot every call.
+        // Production callers responsible for rotation MUST pass an explicit slotId — this test
+        // exists so any future change to the fallback is intentional.
+        var (_, tags1) = KeyPackageEventBuilder.BuildKeyPackageEvent(
+            new byte[] { 1, 2, 3 }, "abc123", Array.Empty<string>());
+        var (_, tags2) = KeyPackageEventBuilder.BuildKeyPackageEvent(
+            new byte[] { 1, 2, 3 }, "abc123", Array.Empty<string>());
+
+        string d1 = tags1.First(t => t[0] == "d")[1];
+        string d2 = tags2.First(t => t[0] == "d")[1];
+
+        Assert.NotEqual(d1, d2);
+    }
+
+    [Fact]
+    public void Build_ExplicitSlotId_IsReusedAcrossCalls()
+    {
+        // The rotation contract: same slotId in => same d-tag out, regardless of KeyPackage bytes.
+        // This is what makes kind 30443 addressable replacement actually replace.
+        string slot = KeyPackageSlotId.GenerateNew();
+
+        var (_, tags1) = KeyPackageEventBuilder.BuildKeyPackageEvent(
+            new byte[] { 1, 2, 3 }, "abc123", Array.Empty<string>(), slotId: slot);
+        var (_, tags2) = KeyPackageEventBuilder.BuildKeyPackageEvent(
+            new byte[] { 9, 8, 7, 6 }, "abc123", Array.Empty<string>(), slotId: slot);
+
+        string d1 = tags1.First(t => t[0] == "d")[1];
+        string d2 = tags2.First(t => t[0] == "d")[1];
+
+        Assert.Equal(slot, d1);
+        Assert.Equal(slot, d2);
+    }
+
+    [Fact]
+    public void Build_ExplicitSlotId_IsPlacedAsFirstTag()
+    {
+        // Per Nostr NIP-01 / NIP-33, the d tag of an addressable event is the first tag.
+        string slot = KeyPackageSlotId.GenerateNew();
+        var (_, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(
+            new byte[] { 1 }, "abc123", Array.Empty<string>(), slotId: slot);
+
+        Assert.Equal("d", tags[0][0]);
+        Assert.Equal(slot, tags[0][1]);
+    }
 }
 
 // ================================================================

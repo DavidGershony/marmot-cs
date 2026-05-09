@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using DotnetMls.Crypto;
 using DotnetMls.Types;
 
@@ -24,7 +23,20 @@ public static class KeyPackageEventBuilder
     /// <param name="identityHex">Hex-encoded identity (typically the Nostr public key).</param>
     /// <param name="relays">List of relay URLs where this key package should be discoverable.</param>
     /// <param name="supportedExtensionTypes">Optional MLS extension type IDs to advertise.</param>
-    /// <param name="slotId">Optional d-tag value for addressable event slot. If null, a random 32-byte hex value is generated.</param>
+    /// <param name="slotId">
+    /// d-tag value for the kind 30443 addressable event slot.
+    /// <para>
+    /// Per MIP-00, this MUST be a stable, cryptographically random 32-byte hex string that the client
+    /// generates <b>once</b> per slot (see <see cref="KeyPackageSlotId.GenerateNew"/>) and reuses on
+    /// every subsequent KeyPackage rotation, so relays replace the previous KeyPackage in place.
+    /// </para>
+    /// <para>
+    /// If null, a fresh random slot ID is generated for this call. This fallback exists for
+    /// one-shot/test scenarios only — production callers that publish KeyPackages for the same identity
+    /// more than once MUST supply a persisted <paramref name="slotId"/>, otherwise each publish creates
+    /// a new addressable-event slot and stale KeyPackages accumulate on the relay.
+    /// </para>
+    /// </param>
     /// <returns>
     /// A tuple of (content, tags) where content is the base64-encoded KeyPackage
     /// and tags is the array of string arrays for the Nostr event.
@@ -49,11 +61,12 @@ public static class KeyPackageEventBuilder
 
         string content = Convert.ToBase64String(keyPackageBytes);
 
-        // Generate d-tag slot ID if not provided (random 32-byte hex)
+        // Generate a one-shot d-tag slot ID if the caller didn't supply one.
+        // NOTE: production callers that publish more than once for the same identity MUST pass a
+        // persisted slotId — see the parameter doc above.
         if (string.IsNullOrEmpty(slotId))
         {
-            var slotBytes = RandomNumberGenerator.GetBytes(32);
-            slotId = Convert.ToHexString(slotBytes).ToLowerInvariant();
+            slotId = KeyPackageSlotId.GenerateNew();
         }
 
         // Compute KeyPackageRef per RFC 9420 Section 5.2:
