@@ -9,7 +9,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
-    <PackageReference Include="DotnetMls" Version="0.1.0-beta.5" Condition="'$(UseLocalDotnetMls)' != 'true'" />
+    <PackageReference Include="DotnetMls" Version="0.1.0-beta.6" Condition="'$(UseLocalDotnetMls)' != 'true'" />
     <ProjectReference Include="..\..\..\dotnet-mls\src\DotnetMls\DotnetMls.csproj" Condition="'$(UseLocalDotnetMls)' == 'true'" />
     <ProjectReference Include="..\MarmotCs.Protocol\MarmotCs.Protocol.csproj" />
     <ProjectReference Include="..\MarmotCs.Storage.Abstractions\MarmotCs.Storage.Abstractions.csproj" />
