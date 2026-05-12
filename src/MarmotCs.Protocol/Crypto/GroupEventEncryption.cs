@@ -1,8 +1,20 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Org.BouncyCastle.Crypto.Parameters;
 using BcChaCha20Poly1305 = Org.BouncyCastle.Crypto.Modes.ChaCha20Poly1305;
 
 namespace MarmotCs.Protocol.Crypto;
+
+/// <summary>
+/// Thrown when a duplicate outbound nonce is detected per MIP-03 §"Encryption Details".
+/// The caller MUST NOT transmit the event and SHOULD perform a self-update immediately.
+/// </summary>
+public class DuplicateNonceException : CryptographicException
+{
+    public DuplicateNonceException()
+        : base("Duplicate outbound nonce detected. MUST NOT transmit per MIP-03. SHOULD self-update immediately.")
+    { }
+}
 
 /// <summary>
 /// ChaCha20-Poly1305 encryption/decryption for kind:445 group event content (MIP-03).
@@ -21,6 +33,27 @@ public static class GroupEventEncryption
 
     private const int NonceSize = 12;
     private const int TagSizeBits = 128;
+
+    // Per MIP-03: "If duplicate outbound nonce detected: MUST NOT transmit"
+    // Tracks outbound nonces per key (key hex -> set of nonce hex strings).
+    // In practice, collision probability is ~2^-48 per pair with a 12-byte random nonce,
+    // but the spec mandates the check.
+    private static readonly ConcurrentDictionary<string, HashSet<string>> _outboundNonces = new();
+
+    /// <summary>
+    /// Clears all tracked outbound nonces. Call when epoch advances (key rotation)
+    /// since nonces are only meaningful within the same key context.
+    /// </summary>
+    public static void ResetNonceTracker() => _outboundNonces.Clear();
+
+    /// <summary>
+    /// Clears tracked outbound nonces for a specific key.
+    /// </summary>
+    public static void ResetNonceTracker(byte[] key)
+    {
+        var keyHex = Convert.ToHexString(key);
+        _outboundNonces.TryRemove(keyHex, out _);
+    }
 
     /// <summary>
     /// Encrypts MLS message bytes using ChaCha20-Poly1305 per MIP-03.
@@ -41,7 +74,18 @@ public static class GroupEventEncryption
             throw new ArgumentException("Plaintext must not be empty.", nameof(plaintext));
 
         // Generate cryptographically random 12-byte nonce
+        // RNG failure: CryptographicException propagates — MUST abort, MUST NOT use deterministic fallback (MIP-03)
         byte[] nonce = RandomNumberGenerator.GetBytes(NonceSize);
+
+        // Per MIP-03 §"Encryption Details": "If duplicate outbound nonce detected: MUST NOT transmit"
+        var keyHex = Convert.ToHexString(key);
+        var nonceHex = Convert.ToHexString(nonce);
+        var nonceSet = _outboundNonces.GetOrAdd(keyHex, _ => new HashSet<string>());
+        lock (nonceSet)
+        {
+            if (!nonceSet.Add(nonceHex))
+                throw new DuplicateNonceException();
+        }
 
         var cipher = new BcChaCha20Poly1305();
         var parameters = new AeadParameters(
