@@ -77,6 +77,14 @@ public sealed record WelcomePreview(
     string? SenderNostrPubkey);
 
 /// <summary>
+/// Result when a locally staged commit won the MIP-03 tiebreaker against an incoming
+/// commit at the same epoch. The incoming commit was discarded.
+/// </summary>
+/// <param name="DiscardedEventId">The Nostr event ID of the discarded incoming commit.</param>
+public sealed record RaceWonResult(
+    string DiscardedEventId) : MessageProcessingResult;
+
+/// <summary>
 /// Describes pending member changes that have been proposed but not yet committed.
 /// </summary>
 /// <param name="PendingAdds">Hex-encoded identities of members pending addition.</param>

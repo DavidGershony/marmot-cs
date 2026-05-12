@@ -46,6 +46,16 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     private readonly Dictionary<string, byte[]> _signingPrivateKeys = new();
     private readonly Dictionary<string, byte[]> _hpkePrivateKeys = new();
 
+    // Per-group metadata for staged (pending) commits — used by the MIP-03 tiebreaker
+    private readonly Dictionary<string, PendingCommitMetadata> _pendingMetadata = new();
+
+    /// <summary>
+    /// Metadata tracked for a staged commit, used for MIP-03 tiebreaker resolution.
+    /// </summary>
+    internal sealed record PendingCommitMetadata(
+        string IntendedEventId,
+        DateTimeOffset IntendedCreatedAt);
+
     internal Mdk(TStorage storage, MdkConfig config, IMdkCallback? callback, ILogger? logger)
     {
         _storage = storage;
@@ -1161,6 +1171,8 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     public async Task<UpdateGroupResult> StageAddMembersAsync(
         byte[] groupId,
         byte[][] keyPackageBytesList,
+        string? intendedEventId = null,
+        DateTimeOffset? intendedCreatedAt = null,
         CancellationToken ct = default)
     {
         ThrowIfDisposed();
@@ -1208,6 +1220,10 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
 
             await _snapshots.ReleaseAsync(snapshotId, ct);
 
+            // Store pending metadata for MIP-03 tiebreaker
+            if (intendedEventId != null && intendedCreatedAt.HasValue)
+                _pendingMetadata[hex] = new PendingCommitMetadata(intendedEventId, intendedCreatedAt.Value);
+
             _logger.LogInformation(
                 "Staged add of {Count} members to group {GroupId} (epoch still {Epoch}, pending merge)",
                 addedIdentities.Length, hex, mlsGroup.Epoch);
@@ -1234,6 +1250,8 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     public async Task<UpdateGroupResult> StageRemoveMembersAsync(
         byte[] groupId,
         uint[] leafIndices,
+        string? intendedEventId = null,
+        DateTimeOffset? intendedCreatedAt = null,
         CancellationToken ct = default)
     {
         ThrowIfDisposed();
@@ -1274,6 +1292,9 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
 
             await _snapshots.ReleaseAsync(snapshotId, ct);
 
+            if (intendedEventId != null && intendedCreatedAt.HasValue)
+                _pendingMetadata[hex] = new PendingCommitMetadata(intendedEventId, intendedCreatedAt.Value);
+
             _logger.LogInformation(
                 "Staged remove of {Count} members from group {GroupId} (epoch still {Epoch}, pending merge)",
                 removedIdentities.Count, hex, mlsGroup.Epoch);
@@ -1298,7 +1319,10 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     /// See <see cref="StageAddMembersAsync"/> for the MIP-03 compliant flow.
     /// </summary>
     public async Task<UpdateGroupResult> StageSelfUpdateAsync(
-        byte[] groupId, CancellationToken ct = default)
+        byte[] groupId,
+        string? intendedEventId = null,
+        DateTimeOffset? intendedCreatedAt = null,
+        CancellationToken ct = default)
     {
         ThrowIfDisposed();
         string hex = Convert.ToHexString(groupId);
@@ -1329,6 +1353,9 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
                 throw new GroupNotFoundException(groupId);
 
             await _snapshots.ReleaseAsync(snapshotId, ct);
+
+            if (intendedEventId != null && intendedCreatedAt.HasValue)
+                _pendingMetadata[hex] = new PendingCommitMetadata(intendedEventId, intendedCreatedAt.Value);
 
             _logger.LogInformation(
                 "Staged self-update in group {GroupId} (epoch still {Epoch}, pending merge)", hex, mlsGroup.Epoch);
@@ -1375,6 +1402,7 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
             throw new InvalidOperationException($"No pending commit to merge for group {hex}");
 
         mlsGroup.MergePendingCommit();
+        _pendingMetadata.Remove(hex);
 
         // Promote pending HPKE key if one was staged (self-update)
         var pendingHpkeKey = $"{hex}:pending";
@@ -1420,6 +1448,163 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
             throw new GroupNotFoundException(groupId);
 
         return mlsGroup.HasPendingCommit;
+    }
+
+    /// <summary>
+    /// Processes an incoming commit from another group member, applying the MIP-03
+    /// tiebreaker when a locally staged commit is pending at the same epoch.
+    /// <para>
+    /// If no pending commit exists, delegates directly to <c>MlsGroup.ProcessCommit</c>.
+    /// If a pending commit exists at the same epoch, compares using the MIP-03 rule
+    /// (earliest <c>created_at</c>, then lex-smallest event ID):
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>Incoming wins → clears pending, processes incoming, throws <see cref="RaceLostException"/>
+    ///     so the caller can retry their staged operation at the new epoch.</item>
+    ///   <item>Ours wins → discards incoming silently and returns <see cref="RaceWonResult"/>.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="groupId">The group identifier bytes.</param>
+    /// <param name="commitBytes">The serialized MLS commit message bytes (PrivateMessage, optionally inside MLSMessage envelope).</param>
+    /// <param name="incomingEventId">The Nostr event ID of the incoming commit.</param>
+    /// <param name="incomingCreatedAt">The <c>created_at</c> timestamp of the incoming commit event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>A <see cref="CommitResult"/> on success, or <see cref="RaceWonResult"/> if our pending commit won.</returns>
+    /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
+    /// <exception cref="RaceLostException">Thrown when the incoming commit wins the tiebreaker.</exception>
+    public async Task<MessageProcessingResult> ProcessIncomingCommitAsync(
+        byte[] groupId,
+        byte[] commitBytes,
+        string incomingEventId,
+        DateTimeOffset incomingCreatedAt,
+        CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
+
+        var gid = new MlsGroupId(groupId);
+
+        // Parse the commit message
+        PrivateMessage privateMsg = ParseCommitMessage(commitBytes);
+
+        // If no pending commit, standard path
+        if (!mlsGroup.HasPendingCommit || !_pendingMetadata.TryGetValue(hex, out var pending))
+        {
+            return await ProcessCommitDirectAsync(mlsGroup, gid, groupId, hex, privateMsg, incomingEventId, incomingCreatedAt, ct);
+        }
+
+        // Tiebreaker: pending commit at the same epoch races with incoming
+        var winner = MarmotCs.Protocol.Mip03.CommitRaceResolver.ResolveWinner(new[]
+        {
+            (eventId: pending.IntendedEventId, createdAt: pending.IntendedCreatedAt),
+            (eventId: incomingEventId, createdAt: incomingCreatedAt),
+        });
+
+        if (winner == incomingEventId)
+        {
+            // Incoming wins — clear our pending commit and process the incoming one
+            _logger.LogInformation(
+                "Tiebreaker: incoming {IncomingId} wins over pending {PendingId} for group {GroupId}",
+                incomingEventId, pending.IntendedEventId, hex);
+
+            mlsGroup.ClearPendingCommit();
+            _pendingMetadata.Remove(hex);
+
+            // Clean up pending HPKE key if self-update was staged
+            var pendingHpkeKey = $"{hex}:pending";
+            if (_hpkePrivateKeys.TryGetValue(pendingHpkeKey, out var pendingKey))
+            {
+                CryptographicOperations.ZeroMemory(pendingKey);
+                _hpkePrivateKeys.Remove(pendingHpkeKey);
+            }
+
+            var result = await ProcessCommitDirectAsync(mlsGroup, gid, groupId, hex, privateMsg, incomingEventId, incomingCreatedAt, ct);
+
+            throw new RaceLostException(mlsGroup.Epoch, incomingEventId);
+        }
+        else
+        {
+            // Ours wins — discard the incoming commit
+            _logger.LogInformation(
+                "Tiebreaker: pending {PendingId} wins over incoming {IncomingId} for group {GroupId}",
+                pending.IntendedEventId, incomingEventId, hex);
+
+            return new RaceWonResult(incomingEventId);
+        }
+
+        }
+        finally { groupLock.Release(); }
+    }
+
+    private static PrivateMessage ParseCommitMessage(byte[] commitBytes)
+    {
+        if (commitBytes.Length >= 4 && commitBytes[0] == 0x00 && commitBytes[1] == 0x01)
+        {
+            var envReader = new TlsReader(commitBytes);
+            var mlsMsg = MlsMessage.ReadFrom(envReader);
+            if (mlsMsg.Body is PrivateMessage pm)
+                return pm;
+            throw new InvalidMessageException($"Expected PrivateMessage in MLSMessage envelope, got wire format {mlsMsg.WireFormat}");
+        }
+        else
+        {
+            var reader = new TlsReader(commitBytes);
+            return PrivateMessage.ReadFrom(reader);
+        }
+    }
+
+    private async Task<MessageProcessingResult> ProcessCommitDirectAsync(
+        MlsGroup mlsGroup,
+        MlsGroupId gid,
+        byte[] groupId,
+        string hex,
+        PrivateMessage privateMsg,
+        string eventId,
+        DateTimeOffset createdAt,
+        CancellationToken ct)
+    {
+        var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
+        try
+        {
+            mlsGroup.ProcessCommit(privateMsg);
+
+            var existingGroup = await _storage.Groups.GetGroupAsync(gid, ct);
+            if (existingGroup != null)
+            {
+                var updatedGroup = existingGroup with
+                {
+                    Epoch = mlsGroup.Epoch,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
+                await _storage.Groups.UpdateGroupAsync(updatedGroup, ct);
+            }
+
+            await _storage.Messages.SaveProcessedMessageAsync(
+                new ProcessedMessage(eventId, gid, ProcessedMessageState.Completed, DateTimeOffset.UtcNow), ct);
+
+            await _storage.Groups.SaveAppliedCommitAsync(gid, mlsGroup.Epoch, eventId, createdAt, ct);
+
+            if (_callback != null)
+                await _callback.OnEpochAdvanceAsync(groupId, mlsGroup.Epoch, ct);
+
+            await _snapshots.ReleaseAsync(snapshotId, ct);
+
+            var group = await _storage.Groups.GetGroupAsync(gid, ct);
+            return new CommitResult(group!);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ProcessCommitDirect failed for group {GroupId}", hex);
+            await _snapshots.RollbackAsync(snapshotId, ct);
+            throw;
+        }
     }
 
     // ====== Group State Export/Import ======
@@ -1508,6 +1693,7 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
             throw new GroupNotFoundException(groupId);
 
         mlsGroup.ClearPendingCommit();
+        _pendingMetadata.Remove(hex);
 
         // Clean up any pending HPKE key from a staged self-update
         var pendingHpkeKey = $"{hex}:pending";

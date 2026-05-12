@@ -65,6 +65,27 @@ public class DuplicateMessageException : MdkException
 }
 
 /// <summary>
+/// Thrown when a locally staged commit loses the MIP-03 tiebreaker against an incoming
+/// commit at the same epoch. The caller should discard their pending operation and
+/// retry at the new epoch.
+/// </summary>
+public class RaceLostException : MdkException
+{
+    /// <summary>The new epoch after the winning commit was applied.</summary>
+    public ulong NewEpoch { get; }
+
+    /// <summary>The Nostr event ID of the winning incoming commit.</summary>
+    public string WinnerEventId { get; }
+
+    public RaceLostException(ulong newEpoch, string winnerEventId)
+        : base($"Staged commit lost race at epoch {newEpoch - 1}; winner is {winnerEventId}. Retry at epoch {newEpoch}.")
+    {
+        NewEpoch = newEpoch;
+        WinnerEventId = winnerEventId;
+    }
+}
+
+/// <summary>
 /// Thrown when a message's epoch is behind the group's current epoch
 /// beyond the tolerance window.
 /// </summary>
