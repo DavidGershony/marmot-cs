@@ -215,6 +215,8 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     /// <summary>
     /// Adds members to the group by their key packages.
     /// Creates add proposals, commits them, and produces a Welcome for new members.
+    /// The commit is auto-merged immediately — use <see cref="StageAddMembersAsync"/> for
+    /// deferred merge (MIP-03 compliant publish-then-merge).
     /// </summary>
     /// <param name="groupId">The group identifier bytes.</param>
     /// <param name="keyPackageBytesList">Serialized key packages of members to add.</param>
@@ -222,6 +224,7 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     /// <returns>The update result including commit bytes and welcome bytes.</returns>
     /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
     /// <exception cref="CommitException">Thrown when the commit operation fails.</exception>
+    [Obsolete("Use StageAddMembersAsync + MergeStagedCommitAsync for MIP-03 compliant publish-then-merge.")]
     public async Task<UpdateGroupResult> AddMembersAsync(
         byte[] groupId,
         byte[][] keyPackageBytesList,
@@ -316,13 +319,10 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
 
     /// <summary>
     /// Removes members from the group by their leaf indices.
+    /// The commit is auto-merged immediately — use <see cref="StageRemoveMembersAsync"/> for
+    /// deferred merge (MIP-03 compliant publish-then-merge).
     /// </summary>
-    /// <param name="groupId">The group identifier bytes.</param>
-    /// <param name="leafIndices">The leaf indices of members to remove.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The update result including commit bytes.</returns>
-    /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
-    /// <exception cref="CommitException">Thrown when the commit operation fails.</exception>
+    [Obsolete("Use StageRemoveMembersAsync + MergeStagedCommitAsync for MIP-03 compliant publish-then-merge.")]
     public async Task<UpdateGroupResult> RemoveMembersAsync(
         byte[] groupId,
         uint[] leafIndices,
@@ -1094,13 +1094,10 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
 
     /// <summary>
     /// Performs a self-update commit to rotate the local member's key material.
-    /// This provides forward secrecy by replacing the leaf's HPKE key pair.
+    /// The commit is auto-merged immediately — use <see cref="StageSelfUpdateAsync"/> for
+    /// deferred merge (MIP-03 compliant publish-then-merge).
     /// </summary>
-    /// <param name="groupId">The group identifier bytes.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The update result with commit bytes to publish.</returns>
-    /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
-    /// <exception cref="CommitException">Thrown when the self-update fails.</exception>
+    [Obsolete("Use StageSelfUpdateAsync + MergeStagedCommitAsync for MIP-03 compliant publish-then-merge.")]
     public async Task<UpdateGroupResult> SelfUpdateAsync(
         byte[] groupId, CancellationToken ct = default)
     {
@@ -1151,6 +1148,278 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
             await _snapshots.RollbackAsync(snapshotId, ct);
             throw new CommitException("Failed to self-update", ex);
         }
+    }
+
+    // ====== Staged Commit API (MIP-03 compliant) ======
+
+    /// <summary>
+    /// Stages an add-members commit without auto-merging. The MLS group state remains
+    /// at the current epoch until <see cref="MergeStagedCommitAsync"/> is called.
+    /// This enables the MIP-03 §"Commit Message Race Conditions" sending flow:
+    /// stage → publish commit → wait for relay OK → merge → publish Welcome.
+    /// </summary>
+    public async Task<UpdateGroupResult> StageAddMembersAsync(
+        byte[] groupId,
+        byte[][] keyPackageBytesList,
+        CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
+
+        var gid = new MlsGroupId(groupId);
+        var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
+
+        try
+        {
+            var keyPackages = keyPackageBytesList.Select(bytes =>
+            {
+                var reader = new TlsReader(bytes);
+                return KeyPackage.ReadFrom(reader);
+            }).ToArray();
+
+            var proposals = mlsGroup.ProposeAdd(keyPackages);
+            var (commitMsg, welcome) = mlsGroup.Commit(proposals);
+            // NOTE: No MergePendingCommit() — caller must call MergeStagedCommitAsync after relay confirms
+
+            var commitMlsMessage = new MlsMessage(WireFormat.MlsPrivateMessage, commitMsg);
+            byte[] commitBytes = TlsCodec.Serialize(writer => commitMlsMessage.WriteTo(writer));
+            byte[]? welcomeBytes = welcome != null
+                ? TlsCodec.Serialize(writer => welcome.WriteTo(writer))
+                : null;
+
+            var addedIdentities = keyPackages
+                .Select(kp => kp.LeafNode.Credential is BasicCredential bc
+                    ? Convert.ToHexString(bc.Identity)
+                    : "")
+                .Where(s => s.Length > 0)
+                .ToArray();
+
+            // Do NOT update storage epoch — group stays at current epoch until merge
+            var existingGroup = await _storage.Groups.GetGroupAsync(gid, ct);
+            if (existingGroup == null)
+                throw new GroupNotFoundException(groupId);
+
+            await _snapshots.ReleaseAsync(snapshotId, ct);
+
+            _logger.LogInformation(
+                "Staged add of {Count} members to group {GroupId} (epoch still {Epoch}, pending merge)",
+                addedIdentities.Length, hex, mlsGroup.Epoch);
+
+            return new UpdateGroupResult(
+                existingGroup, commitBytes, welcomeBytes,
+                addedIdentities, Array.Empty<string>());
+        }
+        catch (Exception ex) when (ex is not MdkException)
+        {
+            _logger.LogError(ex, "Failed to stage add members to group {GroupId}", hex);
+            await _snapshots.RollbackAsync(snapshotId, ct);
+            throw new CommitException("Failed to stage add members", ex);
+        }
+
+        }
+        finally { groupLock.Release(); }
+    }
+
+    /// <summary>
+    /// Stages a remove-members commit without auto-merging.
+    /// See <see cref="StageAddMembersAsync"/> for the MIP-03 compliant flow.
+    /// </summary>
+    public async Task<UpdateGroupResult> StageRemoveMembersAsync(
+        byte[] groupId,
+        uint[] leafIndices,
+        CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
+
+        var gid = new MlsGroupId(groupId);
+        var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
+
+        try
+        {
+            var members = mlsGroup.GetMembers();
+            var removedIdentities = new List<string>();
+            foreach (var idx in leafIndices)
+            {
+                var member = members.FirstOrDefault(m => m.leafIndex == idx);
+                if (member.identity != null)
+                    removedIdentities.Add(Convert.ToHexString(member.identity));
+            }
+
+            var proposals = leafIndices
+                .Select(idx => mlsGroup.ProposeRemove(idx))
+                .ToList();
+            var (commitMsg, welcome) = mlsGroup.Commit(proposals);
+            // NOTE: No MergePendingCommit()
+
+            byte[] commitBytes = TlsCodec.Serialize(writer => commitMsg.WriteTo(writer));
+
+            var existingGroup = await _storage.Groups.GetGroupAsync(gid, ct);
+            if (existingGroup == null)
+                throw new GroupNotFoundException(groupId);
+
+            await _snapshots.ReleaseAsync(snapshotId, ct);
+
+            _logger.LogInformation(
+                "Staged remove of {Count} members from group {GroupId} (epoch still {Epoch}, pending merge)",
+                removedIdentities.Count, hex, mlsGroup.Epoch);
+
+            return new UpdateGroupResult(
+                existingGroup, commitBytes, null,
+                Array.Empty<string>(), removedIdentities.ToArray());
+        }
+        catch (Exception ex) when (ex is not MdkException)
+        {
+            _logger.LogError(ex, "Failed to stage remove members from group {GroupId}", hex);
+            await _snapshots.RollbackAsync(snapshotId, ct);
+            throw new CommitException("Failed to stage remove members", ex);
+        }
+
+        }
+        finally { groupLock.Release(); }
+    }
+
+    /// <summary>
+    /// Stages a self-update commit without auto-merging.
+    /// See <see cref="StageAddMembersAsync"/> for the MIP-03 compliant flow.
+    /// </summary>
+    public async Task<UpdateGroupResult> StageSelfUpdateAsync(
+        byte[] groupId, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
+
+        var gid = new MlsGroupId(groupId);
+        var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
+
+        try
+        {
+            var (proposal, newHpkePriv) = mlsGroup.ProposeSelfUpdate();
+            var (commitMsg, welcome) = mlsGroup.Commit(
+                new List<Proposal> { proposal });
+            // NOTE: No MergePendingCommit() — HPKE key stored on merge
+            // Store the new HPKE key temporarily; it will be committed on merge
+            _hpkePrivateKeys[$"{hex}:pending"] = newHpkePriv;
+
+            byte[] commitBytes = TlsCodec.Serialize(writer => commitMsg.WriteTo(writer));
+
+            var existingGroup = await _storage.Groups.GetGroupAsync(gid, ct);
+            if (existingGroup == null)
+                throw new GroupNotFoundException(groupId);
+
+            await _snapshots.ReleaseAsync(snapshotId, ct);
+
+            _logger.LogInformation(
+                "Staged self-update in group {GroupId} (epoch still {Epoch}, pending merge)", hex, mlsGroup.Epoch);
+
+            return new UpdateGroupResult(
+                existingGroup, commitBytes, null,
+                Array.Empty<string>(), Array.Empty<string>());
+        }
+        catch (Exception ex) when (ex is not MdkException)
+        {
+            _logger.LogError(ex, "Failed to stage self-update in group {GroupId}", hex);
+            await _snapshots.RollbackAsync(snapshotId, ct);
+            throw new CommitException("Failed to stage self-update", ex);
+        }
+
+        }
+        finally { groupLock.Release(); }
+    }
+
+    /// <summary>
+    /// Merges a previously staged commit, advancing the group to the new epoch.
+    /// Call this after the commit has been confirmed by at least one relay (MIP-03 step 3).
+    /// Updates storage, fires callbacks, and makes the epoch advance visible.
+    /// </summary>
+    /// <param name="groupId">The group identifier bytes.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The updated group record at the new epoch.</returns>
+    /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when there is no pending commit to merge.</exception>
+    public async Task<Group> MergeStagedCommitAsync(
+        byte[] groupId, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
+
+        if (!mlsGroup.HasPendingCommit)
+            throw new InvalidOperationException($"No pending commit to merge for group {hex}");
+
+        mlsGroup.MergePendingCommit();
+
+        // Promote pending HPKE key if one was staged (self-update)
+        var pendingHpkeKey = $"{hex}:pending";
+        if (_hpkePrivateKeys.TryGetValue(pendingHpkeKey, out var newHpkePriv))
+        {
+            _hpkePrivateKeys[hex] = newHpkePriv;
+            _hpkePrivateKeys.Remove(pendingHpkeKey);
+        }
+
+        var gid = new MlsGroupId(groupId);
+        var existingGroup = await _storage.Groups.GetGroupAsync(gid, ct)
+            ?? throw new GroupNotFoundException(groupId);
+
+        var updatedGroup = existingGroup with
+        {
+            Epoch = mlsGroup.Epoch,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+        await _storage.Groups.UpdateGroupAsync(updatedGroup, ct);
+
+        if (_callback != null)
+            await _callback.OnEpochAdvanceAsync(groupId, mlsGroup.Epoch, ct);
+
+        _logger.LogInformation(
+            "Merged staged commit for group {GroupId}, epoch now {Epoch}", hex, mlsGroup.Epoch);
+
+        return updatedGroup;
+
+        }
+        finally { groupLock.Release(); }
+    }
+
+    /// <summary>
+    /// Returns true if the group has a pending (staged) commit that has not yet been merged or cleared.
+    /// </summary>
+    /// <param name="groupId">The group identifier bytes.</param>
+    /// <returns>True if a pending commit exists.</returns>
+    /// <exception cref="GroupNotFoundException">Thrown when the group is not loaded.</exception>
+    public bool HasPendingCommit(byte[] groupId)
+    {
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        return mlsGroup.HasPendingCommit;
     }
 
     // ====== Group State Export/Import ======
@@ -1239,6 +1508,14 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
             throw new GroupNotFoundException(groupId);
 
         mlsGroup.ClearPendingCommit();
+
+        // Clean up any pending HPKE key from a staged self-update
+        var pendingHpkeKey = $"{hex}:pending";
+        if (_hpkePrivateKeys.TryGetValue(pendingHpkeKey, out var pendingKey))
+        {
+            CryptographicOperations.ZeroMemory(pendingKey);
+            _hpkePrivateKeys.Remove(pendingHpkeKey);
+        }
     }
 
     /// <summary>
