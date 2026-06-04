@@ -1376,6 +1376,96 @@ public sealed class Mdk<TStorage> : IDisposable where TStorage : IMdkStorageProv
     }
 
     /// <summary>
+    /// Stages a commit that updates the group's <see cref="NostrGroupData"/> extension (0xF2EE).
+    /// This is used to change admin pubkeys, group name, or other metadata after creation.
+    /// Uses a <see cref="GroupContextExtensionsProposal"/> to replace the group-level extensions.
+    /// See <see cref="StageAddMembersAsync"/> for the MIP-03 compliant publish-then-merge flow.
+    /// </summary>
+    /// <param name="groupId">The group identifier bytes.</param>
+    /// <param name="updatedGroupData">The new group data to set (replaces the existing 0xF2EE extension).</param>
+    /// <param name="intendedEventId">Optional Nostr event ID for MIP-03 tiebreaker resolution.</param>
+    /// <param name="intendedCreatedAt">Optional Nostr created_at for MIP-03 tiebreaker resolution.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>An <see cref="UpdateGroupResult"/> with the commit bytes to publish.</returns>
+    public async Task<UpdateGroupResult> StageGroupDataUpdateAsync(
+        byte[] groupId,
+        NostrGroupData updatedGroupData,
+        string? intendedEventId = null,
+        DateTimeOffset? intendedCreatedAt = null,
+        CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(updatedGroupData);
+        string hex = Convert.ToHexString(groupId);
+        if (!_groups.TryGetValue(hex, out var mlsGroup))
+            throw new GroupNotFoundException(groupId);
+
+        var groupLock = GetGroupLock(hex);
+        await groupLock.WaitAsync(ct);
+        try
+        {
+
+        var gid = new MlsGroupId(groupId);
+        var snapshotId = await _snapshots.CreateSnapshotAsync(gid, ct);
+
+        try
+        {
+            // Build updated extension set: replace (or add) the 0xF2EE extension,
+            // keeping all other group-level extensions intact.
+            var updatedExt = NostrGroupDataExtension.ToExtension(updatedGroupData);
+            var currentExtensions = mlsGroup.GroupContext.Extensions;
+            var newExtensions = new List<Extension>();
+            bool replaced = false;
+            foreach (var ext in currentExtensions)
+            {
+                if (ext.ExtensionType == NostrGroupDataExtension.ExtensionType)
+                {
+                    newExtensions.Add(updatedExt);
+                    replaced = true;
+                }
+                else
+                {
+                    newExtensions.Add(ext);
+                }
+            }
+            if (!replaced)
+                newExtensions.Add(updatedExt);
+
+            var gceProposal = new GroupContextExtensionsProposal(newExtensions.ToArray());
+            var (commitMsg, welcome) = mlsGroup.Commit(
+                new List<Proposal> { gceProposal });
+            // NOTE: No MergePendingCommit() — caller must publish first, then merge.
+
+            byte[] commitBytes = TlsCodec.Serialize(writer => commitMsg.WriteTo(writer));
+
+            var existingGroup = await _storage.Groups.GetGroupAsync(gid, ct);
+            if (existingGroup == null)
+                throw new GroupNotFoundException(groupId);
+
+            await _snapshots.ReleaseAsync(snapshotId, ct);
+
+            if (intendedEventId != null && intendedCreatedAt.HasValue)
+                _pendingMetadata[hex] = new PendingCommitMetadata(intendedEventId, intendedCreatedAt.Value);
+
+            _logger.LogInformation(
+                "Staged group data update in group {GroupId} (epoch still {Epoch}, pending merge)", hex, mlsGroup.Epoch);
+
+            return new UpdateGroupResult(
+                existingGroup, commitBytes, null,
+                Array.Empty<string>(), Array.Empty<string>());
+        }
+        catch (Exception ex) when (ex is not MdkException)
+        {
+            _logger.LogError(ex, "Failed to stage group data update in group {GroupId}", hex);
+            await _snapshots.RollbackAsync(snapshotId, ct);
+            throw new CommitException("Failed to stage group data update", ex);
+        }
+
+        }
+        finally { groupLock.Release(); }
+    }
+
+    /// <summary>
     /// Merges a previously staged commit, advancing the group to the new epoch.
     /// Call this after the commit has been confirmed by at least one relay (MIP-03 step 3).
     /// Updates storage, fires callbacks, and makes the epoch advance visible.
